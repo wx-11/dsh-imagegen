@@ -8,7 +8,7 @@
 export const IMAGEGEN_SETTINGS_NAMESPACE = 'dsh-imagegen'
 
 /** Published package version shared by the host updater and the client UI. */
-export const PLUGIN_VERSION = '1.7.3'
+export const PLUGIN_VERSION = '1.7.4'
 
 /** Same-origin route family (loopback-only, mirroring the dsh-ssh fence). */
 export const SETTINGS_API = {
@@ -119,6 +119,15 @@ export const TASK_API = {
 
 /** Reveal the host data directory (saved images) in the OS file manager. */
 export const DATA_FOLDER_API = '/api/dsh-imagegen/data-folder/open' as const
+
+/**
+ * Generation diagnostics (#38): the retained record of upstream attempts, so a
+ * failure can be explained after the fact instead of only being toasted once.
+ */
+export const DIAGNOSTICS_API = {
+  list: '/api/dsh-imagegen/diagnostics/list',
+  clear: '/api/dsh-imagegen/diagnostics/clear',
+} as const
 
 /** Probe the configured S3-compatible object storage. */
 export const STORAGE_API = {
@@ -1075,6 +1084,36 @@ export interface GenerationTask extends EcommerceTaskMeta {
  */
 export interface GenerationTaskSummary extends Omit<GenerationTask, 'result'> {
   resultAvailable: boolean
+}
+
+/** What one upstream attempt was doing (see diagnostics-store.ts). */
+export type DiagnosticPhase = 'generate' | 'fetch-result' | 'poll-task' | 'chat' | 'config'
+
+/**
+ * One retained upstream attempt (#38). Every string is already redacted
+ * host-side, so the panel may render and copy these freely.
+ */
+export interface DiagnosticEntry {
+  id: string
+  at: number
+  phase: DiagnosticPhase
+  channel: string
+  model: string
+  mode: string
+  /** The exact URL called, query string stripped. */
+  url: string
+  method: string
+  status?: number
+  errorCode?: string
+  failureCode?: string
+  message: string
+  bodyExcerpt?: string
+  requestExcerpt?: string
+  requestBytes?: number
+  responseBytes?: number
+  durationMs: number
+  hadAuth: boolean
+  apiUrlFull?: boolean
 }
 /** GitHub Release update information shown by the client. */
 export interface UpdateInfo {

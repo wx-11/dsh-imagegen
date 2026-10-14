@@ -8,7 +8,7 @@
  * a platform module) so the studio matches the dsh shell look by construction.
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
@@ -24,7 +24,7 @@ import { InspirationGallery } from './InspirationGallery.tsx'
 import { CanvasWorkspace } from './CanvasWorkspace.tsx'
 import { ModelPicker, resolveModelChoice, type ModelPickerValue } from './ModelPicker.tsx'
 import { useImageGenLanguageTick } from './use-language.ts'
-import type { EcommerceRefRole, GeneratedImage, GenerateMode, GenerateRequest, GenerationTask, GenerationTaskStatus, GenerationTaskSummary, HistoryEntry, HistoryImageRef, ProductSetDraft, ProductSetSlot, UpdateInfo } from '../protocol.ts'
+import type { DiagnosticEntry, EcommerceRefRole, GeneratedImage, GenerateMode, GenerateRequest, GenerationTask, GenerationTaskStatus, GenerationTaskSummary, HistoryEntry, HistoryImageRef, ProductSetDraft, ProductSetSlot, UpdateInfo } from '../protocol.ts'
 import { AGENT_IMAGE_API, SUBSCRIPTION_API, SUBSCRIPTION_PROVIDERS, type SubscriptionProvider } from '../protocol.ts'
 import type { ImageGenConfig, ImageGenScope, ImageModelGroup } from './settings-scope.ts'
 import { imageModelOptions } from './settings-scope.ts'
@@ -698,6 +698,7 @@ export function ImageGenPanel(props: {
   const taskPollStartedAtRef = useRef(Date.now())
   const observedTaskIdsRef = useRef<Set<string>>(new Set())
   const submittedTaskIdsRef = useRef<Set<string>>(new Set())
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [comparison, setComparison] = useState<ComparisonSession | null>(null)
   const [comparisonFullscreen, setComparisonFullscreen] = useState(false)
   const [ecommerce, setEcommerce] = useState<ProductSetDraft>(() => {
@@ -2016,6 +2017,7 @@ export function ImageGenPanel(props: {
       <header className={css.historyHeader}>
         <span className={css.historyTitle}>{tt('tasks.title')}{activeTasks.length > 0 ? ` · ${activeTasks.length}` : ''}</span>
         <div className={css.historyHeaderActions}>
+          <button type="button" className={css.historyClear} data-diagnostics-open="" aria-pressed={diagnosticsOpen} title={tt('diagnostics.hint')} onClick={() => { setDiagnosticsOpen(open => !open) }}>{tt('diagnostics.open')}</button>
           <button
             type="button"
             className={css.historyNew}
@@ -3014,6 +3016,7 @@ export function ImageGenPanel(props: {
               )}
             </div>
           ) : null}
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
           {workspace === 'normal' && tab !== 'gallery' && comparison !== null ? (
             <section className={css.comparisonBoard} aria-label={tt('compare.title')}>
               <header><div><strong>{tt('compare.title')}</strong><span>{comparisonResults.length} / {comparisonTasks.length}{generating ? ` · ${tt('canvas.elapsed', { seconds: elapsed })}` : ''}</span></div><button type="button" disabled={comparisonResults.length === 0} onClick={() => { setComparisonFullscreen(true) }}>{tt('compare.fullscreen')}</button></header>
@@ -3304,6 +3307,7 @@ export function ImageGenPanel(props: {
           {conversationMessage}
         </div>
       ) : null}
+      <DiagnosticsPanel api={api} open={diagnosticsOpen} onClose={() => { setDiagnosticsOpen(false) }} />
     </div>
   )
 }
@@ -3316,4 +3320,144 @@ function extensionOf(mime: string): string {
     case 'image/gif': return 'gif'
     default: return 'png'
   }
+}
+
+/**
+ * Retained upstream attempts (#38).
+ *
+ * The reporter of that issue reverse-engineered an image API, verified it
+ * against new-api, and then watched every plugin call fail while neither side
+ * had a log entry — the request never reached their gateway. The plugin showed
+ * one sentence and kept nothing, so the address it actually called, the status
+ * it got and the socket error behind it were all unrecoverable.
+ *
+ * This surface is the missing record: every attempt, newest first, with the
+ * facts that separate a wrong URL from a refused connection, plus a one-click
+ * copy that is safe to paste into a public issue.
+ */
+function DiagnosticsPanel(props: {
+  api: ImageGenApi
+  open: boolean
+  onClose: () => void
+}): React.JSX.Element | null {
+  // Re-render on locale change, matching the rest of the panel.
+  useImageGenLanguageTick()
+  const [entries, setEntries] = useState<DiagnosticEntry[]>([])
+  const [loading, setLoading] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      setEntries(await props.api.diagnosticsList())
+    } catch {
+      setEntries([])
+    } finally {
+      setLoading(false)
+    }
+  }, [props.api])
+
+  // Load whenever the panel opens, so the record is never stale.
+  useEffect(() => {
+    if (!props.open) return
+    void reload()
+  }, [props.open, reload])
+
+  /** Human-readable rendering of one attempt, in the caller's language. */
+  const describe = useCallback((entry: DiagnosticEntry): string => {
+    const parts: string[] = [`[${new Date(entry.at).toLocaleTimeString()}] ${entry.phase} · ${entry.channel}`]
+    if (entry.model !== '') parts.push(entry.model)
+    parts.push(`${entry.method} ${entry.url}`)
+    if (entry.status !== undefined) parts.push(`HTTP ${entry.status}`)
+    if (entry.errorCode !== undefined && entry.errorCode !== '') parts.push(entry.errorCode)
+    if (entry.failureCode !== undefined && entry.failureCode !== '') parts.push(entry.failureCode)
+    parts.push(`${entry.durationMs}ms`)
+    if (entry.requestBytes !== undefined) parts.push(`req ${entry.requestBytes}B`)
+    parts.push(entry.hadAuth ? 'auth=yes' : 'auth=no')
+    if (entry.apiUrlFull === true) parts.push('exact-url')
+    parts.push(`\n  ${entry.message}`)
+    if (entry.bodyExcerpt !== undefined && entry.bodyExcerpt !== '') parts.push(`\n  <- ${entry.bodyExcerpt}`)
+    if (entry.requestExcerpt !== undefined && entry.requestExcerpt !== '') parts.push(`\n  -> ${entry.requestExcerpt}`)
+    return parts.join(' ')
+  }, [])
+
+  const copyAll = useCallback(async () => {
+    const text = entries.map(describe).join('\n\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => { setCopied(false) }, 1600)
+    } catch {
+      // Clipboard unavailable (permissions / insecure context): leave the panel
+      // as the source of truth rather than pretending the copy worked.
+      setCopied(false)
+    }
+  }, [entries, describe])
+
+  const clearAll = useCallback(async () => {
+    try {
+      await props.api.diagnosticsClear()
+    } catch {
+      // Clearing is best-effort; reloading shows the true state either way.
+    }
+    await reload()
+  }, [props.api, reload])
+
+  if (!props.open) return null
+
+  return (
+    <section className={css.diagnosticsPanel} aria-label={tt('diagnostics.title')}>
+      <header className={css.diagnosticsHeader}>
+        <div>
+          <strong>{tt('diagnostics.title')}</strong>
+          <span>{tt('diagnostics.count', { count: entries.length })}</span>
+        </div>
+        <div className={css.diagnosticsActions}>
+          <button type="button" onClick={() => { void reload() }} disabled={loading}>{loading ? tt('diagnostics.loading') : tt('diagnostics.refresh')}</button>
+          <button type="button" onClick={() => { void copyAll() }} disabled={entries.length === 0}>{copied ? tt('diagnostics.copied') : tt('diagnostics.copy')}</button>
+          <button type="button" onClick={() => { void clearAll() }} disabled={entries.length === 0}>{tt('diagnostics.clear')}</button>
+          <button type="button" aria-label={tt('preview.close')} onClick={props.onClose}>×</button>
+        </div>
+      </header>
+      <p className={css.diagnosticsHint}>{tt('diagnostics.hint')}</p>
+      {entries.length === 0 ? (
+        <p className={css.diagnosticsEmpty}>{tt('diagnostics.empty')}</p>
+      ) : (
+        <div className={css.diagnosticsRows}>
+          {entries.map(entry => (
+            <article key={entry.id} className={css.diagnosticsRow} data-phase={entry.phase}>
+              <div className={css.diagnosticsMeta}>
+                <span className={css.diagnosticsPhase}>{entry.phase}</span>
+                <span>{new Date(entry.at).toLocaleTimeString()}</span>
+                <span>{entry.channel}</span>
+                {entry.model !== '' ? <span>{entry.model}</span> : null}
+                {entry.status !== undefined ? <span data-status={entry.status}>HTTP {entry.status}</span> : null}
+                {entry.errorCode !== undefined && entry.errorCode !== '' ? <span data-error-code="">{entry.errorCode}</span> : null}
+                <span>{entry.durationMs}ms</span>
+                {entry.requestBytes !== undefined ? <span>req {entry.requestBytes}B</span> : null}
+                <span>{entry.hadAuth ? 'auth' : 'no-auth'}</span>
+                {entry.apiUrlFull === true ? <span>{tt('diagnostics.exactUrl')}</span> : null}
+              </div>
+              {/* The address actually called: the single most useful fact when
+                  a request never reached the reporter's gateway. */}
+              <code className={css.diagnosticsUrl}>{entry.method} {entry.url}</code>
+              <p className={css.diagnosticsMessage}>{entry.message}</p>
+              {entry.bodyExcerpt !== undefined && entry.bodyExcerpt !== '' ? (
+                <details className={css.diagnosticsDetail}>
+                  <summary>{tt('diagnostics.response')}</summary>
+                  <pre>{entry.bodyExcerpt}</pre>
+                </details>
+              ) : null}
+              {entry.requestExcerpt !== undefined && entry.requestExcerpt !== '' ? (
+                <details className={css.diagnosticsDetail}>
+                  <summary>{tt('diagnostics.requestLabel')}</summary>
+                  <pre>{entry.requestExcerpt}</pre>
+                </details>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  )
 }

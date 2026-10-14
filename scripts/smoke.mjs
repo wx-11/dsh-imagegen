@@ -20,6 +20,19 @@ import { join } from 'node:path'
 const root = new URL('../', import.meta.url)
 const results = []
 const packageJson = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
+
+/**
+ * Redirect the plugin's data root into a throwaway directory BEFORE the host
+ * half is imported. The canvas, history and gallery stores resolve their paths
+ * from DSH_HOME at module load, so without this the smoke run would create
+ * canvases inside the developer's real ~/.dsh/dsh-imagegen.
+ */
+const smokeHome = mkdtempSync(join(tmpdir(), 'dsh-imagegen-smoke-home-'))
+process.env.DSH_HOME = smokeHome
+process.on('exit', () => {
+  try { rmSync(smokeHome, { recursive: true, force: true }) } catch { /* best effort */ }
+})
+
 /** Run one check; async-aware and sequential so nothing races the servers. */
 async function check(name, fn) {
   try {
@@ -560,6 +573,84 @@ await check('B4 config missing errors are user-presentable', async () => {
     host.generateImage({ apiUrl: 'http://x', apiKey: '' }, { mode: 'text', model: 'gpt-image-2', prompt: 'x', size: 'auto', quality: 'auto', n: 1, detail: '' }),
     /api_key 未配置/,
   )
+})
+
+await check('B4b a failed call is explainable afterwards (#38)', async () => {
+  // The reporter of #38 reverse-engineered an image API, verified it against
+  // new-api, and then watched every plugin call fail while NEITHER side had a
+  // log entry — because the request never reached their gateway. The plugin
+  // toasted one sentence and kept no record, so the URL it actually called, the
+  // HTTP status and the network error code were all unrecoverable.
+  host.clearDiagnostics()
+
+  // 1. A refused connection: no response at all, so the URL and the socket code
+  //    are the only evidence that the request left the process.
+  const closedPort = await (async () => {
+    const probe = createServer(() => {})
+    await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
+    const port = probe.address().port
+    await new Promise(resolve => probe.close(resolve))
+    return port
+  })()
+  await assert.rejects(
+    host.generateImage(
+      { apiUrl: `http://127.0.0.1:${closedPort}/v1`, apiKey: 'sk-secret-key-abcdefghijklmnop', channelName: 'MyChannel' },
+      { mode: 'text', model: 'gpt-image-2', prompt: 'a cat', size: 'auto', quality: 'auto', n: 1, detail: '' },
+    ),
+  )
+  const refused = host.listDiagnostics().find(entry => entry.phase === 'generate')
+  assert.ok(refused !== undefined, 'a refused connection leaves a diagnostic entry')
+  assert.equal(refused.url, `http://127.0.0.1:${closedPort}/v1/images/generations`, 'the diagnostic records the FINAL request URL, including the appended path')
+  assert.equal(refused.channel, 'MyChannel', 'the entry names the channel so it maps to a settings row')
+  assert.equal(refused.model, 'gpt-image-2')
+  assert.equal(refused.method, 'POST')
+  assert.equal(refused.failureCode, 'upstream-unreachable')
+  assert.equal(refused.errorCode, 'ECONNREFUSED', 'original socket cause survives diagnostic wrapping')
+  assert.equal(refused.hadAuth, true, 'the entry records THAT a key was sent, never its value')
+  assert.ok(refused.durationMs >= 0, 'the entry records elapsed time')
+  assert.ok(refused.requestBytes > 0, 'the entry records the request body size (a huge edit can be rejected before the app sees it)')
+  assert.equal(refused.status, undefined, 'a request that never got a response carries no status')
+
+  // 2. A non-2xx upstream: the status and the body have to survive, because
+  //    that is where the gateway says WHY it refused.
+  const bad = createServer((_req, res) => {
+    res.writeHead(413, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: { message: 'payload too large' }, request_id: 'req_123' }))
+  })
+  await new Promise(resolve => bad.listen(0, '127.0.0.1', resolve))
+  const badPort = bad.address().port
+  try {
+    await assert.rejects(
+      host.generateImage(
+        { apiUrl: `http://127.0.0.1:${badPort}/v1`, apiKey: 'k', channelName: 'Bad' },
+        { mode: 'text', model: 'gpt-image-2', prompt: 'a dog', size: 'auto', quality: 'auto', n: 1, detail: '' },
+      ),
+    )
+  } finally {
+    await new Promise(resolve => bad.close(resolve))
+  }
+  const rejected = host.listDiagnostics().find(entry => entry.channel === 'Bad')
+  assert.ok(rejected !== undefined, 'a rejected request leaves a diagnostic entry')
+  assert.equal(rejected.status, 413, 'the upstream status is recorded')
+  assert.equal(rejected.failureCode, 'upstream-rejected')
+  assert.match(rejected.message, /payload too large/, 'the upstream message reaches the record')
+  assert.match(rejected.bodyExcerpt ?? '', /req_123/, 'the raw upstream body (with its request id) is kept for support')
+
+  // 3. Redaction: these entries are meant to be pasted into a public issue.
+  const secret = 'sk-live-abcdefghijklmnopqrstuvwxyz0123456789'
+  const redacted = host.redactDiagnosticText(`Authorization: Bearer ${secret}\n{"apiKey":"${secret}"}\nhttps://x.test/v1?api_key=${secret}`)
+  assert.equal(redacted.includes(secret), false, 'the recorded text never carries the key')
+  assert.match(redacted, /<redacted>|<redacted-key>/, 'the redaction is visible in the text')
+  assert.equal(
+    host.redactDiagnosticText('data:image/png;base64,' + 'A'.repeat(5000)).length < 200,
+    true,
+    'inline base64 image payloads are summarised, not stored',
+  )
+
+  // 4. The buffer is bounded and clearable.
+  assert.ok(host.listDiagnostics().length >= 2, 'entries accumulate newest-first')
+  host.clearDiagnostics()
+  assert.equal(host.listDiagnostics().length, 0, 'the panel can clear the record')
 })
 
 await check('B5 upstream error surfaces its message', async () => {
@@ -1615,6 +1706,66 @@ await check('C3 generate route persists history server-side and enforces loopbac
     request.end('{}')
   })
   assert.equal(foreignStatus, 403)
+})
+
+await check('C3b diagnostics routes read back and clear the retained attempts (#38)', async () => {
+  // The panel reads this route after a failure; the record has to survive the
+  // HTTP hop unchanged and stay redacted.
+  host.clearDiagnostics()
+  const clearedOnce = await post('/api/dsh-imagegen/diagnostics/list', {})
+  assert.equal(clearedOnce.body.ok, true)
+  assert.equal(clearedOnce.body.entries.length, 0, 'a fresh buffer is empty')
+
+  // Produce a real failed attempt through the engine, then read it back.
+  host.recordDiagnostic({
+    phase: 'generate',
+    channel: 'SmokeChannel',
+    model: 'gpt-image-2',
+    mode: 'text',
+    url: 'https://api.example.test/v1/images/generations',
+    method: 'POST',
+    status: 404,
+    errorCode: 'ENOTFOUND',
+    failureCode: 'upstream-rejected',
+    message: 'model not found',
+    bodyExcerpt: '{"error":"no such route"}',
+    durationMs: 42,
+    hadAuth: true,
+  })
+  const listed = await post('/api/dsh-imagegen/diagnostics/list', {})
+  assert.equal(listed.body.ok, true)
+  assert.equal(listed.body.entries.length, 1)
+  const entry = listed.body.entries[0]
+  assert.equal(entry.channel, 'SmokeChannel')
+  assert.equal(entry.url, 'https://api.example.test/v1/images/generations', 'the URL the engine called reaches the panel')
+  assert.equal(entry.status, 404)
+  assert.equal(entry.errorCode, 'ENOTFOUND')
+  assert.equal(entry.durationMs, 42)
+  assert.equal(entry.hadAuth, true, 'the panel learns THAT a key was sent, never the key')
+
+  // A secret must not survive the round trip: the store redacts on record.
+  host.recordDiagnostic({
+    phase: 'generate',
+    channel: 'SmokeChannel',
+    model: 'gpt-image-2',
+    mode: 'text',
+    url: 'https://api.example.test/v1/images/generations',
+    method: 'POST',
+    failureCode: 'upstream-unreachable',
+    message: 'failed with Authorization: Bearer {{API_KEY_2iip3dvh}}',
+    bodyExcerpt: '{"apiKey":"{{API_KEY_2iip3dvh}}"}',
+    durationMs: 1,
+    hadAuth: true,
+  })
+  const withSecret = await post('/api/dsh-imagegen/diagnostics/list', {})
+  const serialized = JSON.stringify(withSecret.body)
+  assert.equal(serialized.includes('{{API_KEY_2iip3dvh}}'), false, 'no credential survives to the client')
+  assert.match(serialized, /<redacted/, 'the redaction marker is present instead')
+
+  const cleared = await post('/api/dsh-imagegen/diagnostics/clear', {})
+  assert.equal(cleared.body.ok, true)
+  const afterClear = await post('/api/dsh-imagegen/diagnostics/list', {})
+  assert.equal(afterClear.body.entries.length, 0, 'the Clear action empties the record')
 })
 
 await check('C4 comparison tasks run in parallel and share comparison history metadata', async () => {
@@ -3774,6 +3925,10 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
   const fetchStub = async (input, init) => {
     const path = String(input)
     requestPaths.push(path)
+    if (path.endsWith('/diagnostics/list')) {
+      return { ok: true, json: async () => ({ ok: true, entries: [{ id: 'ui-diag', at: 1, phase: 'generate', channel: 'UI channel', model: 'gpt-image-2', mode: 'text', url: 'https://example.test/v1/images/generations', method: 'POST', message: 'gateway rejected', status: 503, durationMs: 10, hadAuth: true }] }) }
+    }
+    if (path.endsWith('/diagnostics/clear')) return { ok: true, json: async () => ({ ok: true }) }
     if (path.endsWith('/settings/describe')) {
       return {
         ok: true,
@@ -4223,6 +4378,15 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     const taskSidebar = jsdomDocument.querySelector('[data-dsh-imagegen-history]')
     assert.ok(taskSidebar.textContent.includes('任务列表'), 'history is the unified task list')
     assert.equal(view.querySelector('[class*="taskTray"]'), null, 'no duplicate task tray remains')
+    const diagnosticsButton = taskSidebar.querySelector('[data-diagnostics-open]')
+    assert.ok(diagnosticsButton, 'diagnostics is reachable from the single task sidebar')
+    diagnosticsButton.click()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const diagnosticsPanel = view.querySelector('section[aria-label="诊断日志"]')
+    assert.ok(diagnosticsPanel?.textContent.includes('gateway rejected'), 'diagnostics renders the host record')
+    diagnosticsPanel.querySelector('button[aria-label="关闭"]').click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(view.querySelector('section[aria-label="诊断日志"]'), null)
     const storedThumbnail = taskSidebar.querySelector('img[class*="historyThumb"]')
     storedThumbnail.dispatchEvent(new jsdomWindow.Event('error'))
     await new Promise(resolve => setTimeout(resolve, 30))
@@ -4312,6 +4476,30 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     const takeoverSelector = "html[data-dsh-imagegen-active]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*='centerCol'] > :not([data-dsh-imagegen-view]):not([data-slot='conversation']):not([data-slot='main']):not([data-dsh-imagegen-chat-resizer])"
     assert.equal(mainSlot.matches(takeoverSelector), false, 'the keyed main slot survives the studio takeover')
     assert.equal(centreCol.querySelector('[data-other-plugin-entry]').matches(takeoverSelector), true, 'unrelated center-column entries are still hidden')
+    // #38: a shell global panel (the plugin market page) registers into the SAME
+    // keyed `main` slot as the Conversation. The direct-child rule above let the
+    // anchor through and therefore left that page rendering inside it, so the
+    // studio ended up sharing the column with a live panel. Assert on computed
+    // style, not selector matching: only the cascade proves the page is gone.
+    const shellPanelSelector = "html[data-dsh-imagegen-active]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-slot='main'] > :not([data-dsh-imagegen-view]):not([data-phase]):not([data-slot='main.conversation'])"
+    const shellPanel = jsdomDocument.createElement('div')
+    shellPanel.setAttribute('data-shell-panel', 'plugins')
+    shellPanel.textContent = 'plugin market page'
+    mainSlot.append(shellPanel)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(
+      jsdomWindow.getComputedStyle(shellPanel).display,
+      'none',
+      'a shell panel rendered into the keyed main slot yields the column to the studio (#38)',
+    )
+    assert.equal(shellPanel.matches(shellPanelSelector), true, 'the shell-panel rule reaches entries nested inside the main anchor')
+    assert.notEqual(
+      jsdomWindow.getComputedStyle(conversationRoot).display,
+      'none',
+      'replacing the main entry never hides the conversation fixture itself',
+    )
+    shellPanel.remove()
+    await new Promise(resolve => setTimeout(resolve, 20))
     const collapseSelector = "html[data-dsh-imagegen-chat-collapsed][data-dsh-imagegen-active]:not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-slot='main.conversation'] > [data-phase]"
     assert.equal(conversationRoot.matches(collapseSelector), false, 'the open chat track keeps the conversation root')
     // The shipped sheet carries the chat-track placement and the stretch; the
