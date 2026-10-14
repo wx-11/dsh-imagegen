@@ -710,6 +710,7 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
           const byChannel: Record<string, Record<string, number>> = {}
           const totals: Record<string, number> = {}
           for (const entry of entries) {
+            if (entry.status !== undefined && entry.status !== 'completed') continue
             const channelKey = entry.channelId !== undefined ? entry.channelId : (entry.channel !== undefined ? `name:${entry.channel}` : '')
             const alias = entry.model
             const bucket = byChannel[channelKey] ?? (byChannel[channelKey] = {})

@@ -625,6 +625,7 @@ export function ImageGenPanel(props: {
   /** Compare selections are `${channelId}\0${model}` so duplicate aliases stay distinct. */
   const [compareModels, setCompareModels] = useState<string[]>([])
   const [refImage, setRefImage] = useState<{ dataUrl: string; name: string } | null>(null)
+  const [extraReferences, setExtraReferences] = useState<string[]>([])
   const [images, setImages] = useState<GeneratedImage[]>([])
   const [addingToConversation, setAddingToConversation] = useState<number | string | null>(null)
   const [galleryConversationAddingId, setGalleryConversationAddingId] = useState<string | null>(null)
@@ -636,6 +637,8 @@ export function ImageGenPanel(props: {
   const [submitting, setSubmitting] = useState(false)
   const [enhancing, setEnhancing] = useState(false)
   const [configGuide, setConfigGuide] = useState<'generation' | 'enhancement' | 'disabled' | null>(null)
+  const dismissedTaskIdsRef = useRef(new Set<string>())
+  const historyRevisionRef = useRef(0)
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null)
   const [gallery, setGallery] = useState<HistoryEntry[]>([])
@@ -673,7 +676,6 @@ export function ImageGenPanel(props: {
   const taskPollStartedAtRef = useRef(Date.now())
   const observedTaskIdsRef = useRef<Set<string>>(new Set())
   const submittedTaskIdsRef = useRef<Set<string>>(new Set())
-  const [taskTrayOpen, setTaskTrayOpen] = useState(false)
   const [comparison, setComparison] = useState<ComparisonSession | null>(null)
   const [comparisonFullscreen, setComparisonFullscreen] = useState(false)
   const [ecommerce, setEcommerce] = useState<ProductSetDraft>(() => {
@@ -822,7 +824,23 @@ export function ImageGenPanel(props: {
   const galleryTagOptions = [...new Set(gallery.flatMap(entry => entry.tags ?? []))].sort((a, b) => a.localeCompare(b))
   const galleryModels = [...new Set([...imageModels, ...gallery.map(entry => entry.model)])]
 
-  const filteredHistory = groupHistoryEntries(history).filter(group => group.entries.some(entry => {
+  // Durable records are authoritative; only active/unpersisted failures need
+  // an in-memory row. Deleted successful history must not reappear on polling.
+  const taskEntries: HistoryEntry[] = tasks
+    .filter(task => !dismissedTaskIdsRef.current.has(task.id) && !history.some(entry => (entry.taskId ?? entry.id) === task.id)
+      && (task.status === 'queued' || task.status === 'running'
+        || task.status === 'failed' || task.status === 'cancelled'
+        || task.result?.historyError !== undefined))
+    .map(task => ({
+      ...task.request, id: task.id, taskId: task.id, status: task.status,
+      createdAt: task.createdAt, startedAt: task.startedAt, finishedAt: task.finishedAt,
+      error: task.error ?? task.result?.historyError, quality: 'auto', detail: '',
+      images: (task.result?.images ?? []).map(image => ({ ...image, url: srcOf(image) })),
+      references: [task.request.image, ...(task.request.images ?? [])]
+        .filter((url): url is string => !!url).map(url => ({ url, mime: 'image/png' })),
+    }))
+  const taskHistory = [...taskEntries, ...history].sort((a, b) => b.createdAt - a.createdAt)
+  const filteredHistory = groupHistoryEntries(taskHistory).filter(group => group.entries.some(entry => {
     const query = historyQuery.trim().toLocaleLowerCase()
     const models = modelsOfHistoryEntry(entry)
     return (query === '' || `${entry.prompt} ${models.join(' ')}`.toLocaleLowerCase().includes(query))
@@ -838,7 +856,7 @@ export function ImageGenPanel(props: {
     initialDataRequestedRef.current = true
     api.historyList()
       .then(entries => { setHistory(entries) })
-      .catch(() => { /* history unavailable — leave the list empty */ })
+      .catch(caught => { setError(errorMessage(caught)) })
     api.galleryList()
       .then(entries => { setGallery(entries) })
       .catch(() => { /* gallery unavailable — leave the list empty */ })
@@ -869,6 +887,7 @@ export function ImageGenPanel(props: {
   useEffect(() => {
     let disposed = false
     let refreshing = false
+    let lastHistoryRefresh = 0
     const refresh = (): void => {
       if (refreshing) return
       refreshing = true
@@ -923,26 +942,23 @@ export function ImageGenPanel(props: {
             return [mergeTaskSummary(summary, previous)]
           })
           for (const task of fullById.values()) observedTaskIdsRef.current.add(task.id)
-          const hydratedCompleted = next.filter(task => task.status === 'completed'
+          const completed = next.find(task => task.status === 'completed'
             && task.result !== undefined
-            && !previousTasks.some(old => old.id === task.id && old.status === 'completed'))
+            && !previousTasks.some(old => old.id === task.id && old.status === 'completed')
+            && !comparison?.taskIds.includes(task.id))
           tasksRef.current = next
-          setTasks(current => {
-            const completed = next.find(task => task.status === 'completed'
-              && task.result !== undefined
-              && !current.some(old => old.id === task.id && old.status === 'completed')
-              && !comparison?.taskIds.includes(task.id))
-            if (completed?.result !== undefined) {
-              setImages(completed.result.images)
-              if (completed.result.history !== undefined) setHistory(completed.result.history)
-              setError(completed.result.historyError ?? null)
-            }
-            return next
-          })
-          if (hydratedCompleted.length > 0) {
-            void api.historyList().then(entries => {
-              if (!disposed) setHistory(entries)
-            }).catch(() => {})
+          setTasks(next)
+          if (completed?.result !== undefined) {
+            setImages(completed.result.images)
+            setError(completed.result.historyError ?? null)
+          }
+          // Refresh even without a newly hydrated task: chat, canvas and direct
+          // generation routes also append records to this shared history.
+          if (active && (completed !== undefined || Date.now() - lastHistoryRefresh >= 4500)) {
+            const revision = historyRevisionRef.current
+            const entries = await api.historyList()
+            if (!disposed && revision === historyRevisionRef.current) setHistory(entries)
+            lastHistoryRefresh = Date.now()
           }
         } catch {
           // A transient host error must not stop the polling loop.
@@ -954,7 +970,7 @@ export function ImageGenPanel(props: {
     refresh()
     const timer = window.setInterval(refresh, 1500)
     return () => { disposed = true; window.clearInterval(timer) }
-  }, [api, comparison])
+  }, [api, comparison, active])
 
   // Release checks are host-mediated and intentionally best-effort: a GitHub
   // outage must never make the image-generation studio unavailable. The host
@@ -1099,7 +1115,7 @@ export function ImageGenPanel(props: {
     }
     const reader = new FileReader()
     reader.onload = () => {
-      if (typeof reader.result === 'string') setRefImage({ dataUrl: reader.result, name: file.name })
+      if (typeof reader.result === 'string') { setExtraReferences([]); setRefImage({ dataUrl: reader.result, name: file.name }) }
     }
     reader.onerror = () => { setError(tt('edit.uploadHint')) }
     reader.readAsDataURL(file)
@@ -1163,7 +1179,7 @@ export function ImageGenPanel(props: {
       prompt: promptText,
       size,
       n: count,
-      ...tab === 'edit' && refImage !== null ? { image: refImage.dataUrl } : {},
+      ...tab === 'edit' && refImage !== null ? { image: refImage.dataUrl, ...(extraReferences.length > 0 ? { images: extraReferences } : {}) } : {},
       ...tab === 'edit' && refImage !== null ? { refName: refImage.name } : {},
     }
     setError(null)
@@ -1255,6 +1271,7 @@ export function ImageGenPanel(props: {
     setEcommerceRestored(null)
     setEcommerceAnchor(null)
     setEcommerceAssets([])
+    setExtraReferences([])
     setRefImage(null)
     setError(null)
   }
@@ -1435,6 +1452,8 @@ export function ImageGenPanel(props: {
 
   /** Remove every persisted row belonging to one comparison group. */
   const deleteHistoryGroup = async (group: HistoryGroup): Promise<void> => {
+    historyRevisionRef.current += 1
+    for (const entry of group.entries) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.add(entry.taskId)
     const ids = new Set(group.entries.map(entry => entry.id))
     setHistory(previous => previous.filter(entry => !ids.has(entry.id)))
     if (viewingHistoryId !== null && ids.has(viewingHistoryId)) setViewingHistoryId(null)
@@ -1447,8 +1466,9 @@ export function ImageGenPanel(props: {
       let next = history
       for (const id of ids) next = await api.historyRemove(id)
       setHistory(next)
-    } catch {
-      // Keep the optimistic local removal.
+    } catch (caught) {
+      for (const entry of group.entries) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.delete(entry.taskId)
+      setError(errorMessage(caught))
     }
   }
 
@@ -1456,6 +1476,7 @@ export function ImageGenPanel(props: {
   const startNewCreation = (): void => {
     openTab('text')
     setPrompt('')
+    setExtraReferences([])
     setRefImage(null)
     setImages([])
     setPreview(null)
@@ -1476,12 +1497,15 @@ export function ImageGenPanel(props: {
   /** Remove all history entries. */
   const clearHistory = async (): Promise<void> => {
     if (!window.confirm(tt('history.clearConfirm'))) return
+    historyRevisionRef.current += 1
+    for (const entry of history) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.add(entry.taskId)
     setHistory([])
     setViewingHistoryId(null)
     try {
       setHistory(await api.historyClear())
-    } catch {
-      // Keep the cleared local state.
+    } catch (caught) {
+      dismissedTaskIdsRef.current.clear()
+      setError(errorMessage(caught))
     }
   }
 
@@ -1894,6 +1918,7 @@ export function ImageGenPanel(props: {
   const addPreviewToEdit = (): void => {
     if (previewImage === null || preview === null) return
     openTab('edit')
+    setExtraReferences([])
     setRefImage({
       dataUrl: srcOf(previewImage),
       name: `dsh-image-${preview.index + 1}.${extensionOf(previewImage.mime)}`,
@@ -1903,12 +1928,34 @@ export function ImageGenPanel(props: {
     closePreview()
   }
 
+  const restoreTaskInputs = async (entry: HistoryEntry): Promise<void> => {
+    try {
+      const live = entry.taskId === undefined ? undefined : tasks.find(task => task.id === entry.taskId)
+      const full = live === undefined || history.some(record => record.id === entry.id) ? undefined : await api.taskGet(live.id)
+      const request = full?.request
+      const refs = request === undefined
+        ? (await historyImagesToGenerated(entry.references ?? [])).map(srcOf)
+        : [request.image, ...(request.images ?? [])].filter((value): value is string => !!value)
+      openTab(entry.mode === 'edit' ? 'edit' : 'text')
+      setPrompt(entry.prompt)
+      setModel(entry.model)
+      setModelChannelId(entry.channelId ?? '')
+      setSize(normalizeSize(entry.size))
+      setCount(normalizeImageCount(entry.n))
+      setCompareEnabled(false)
+      setComparison(null)
+      setRefImage(refs[0] === undefined ? null : { dataUrl: refs[0], name: entry.refName ?? tt('tasks.references') })
+      setExtraReferences(refs.slice(1))
+      setError(entry.mode === 'edit' && refs.length === 0 ? tt('tasks.missingReferences') : null)
+    } catch (caught) { setError(errorMessage(caught)) }
+  }
+
   // Render history into the shell sidebar so it remains a separate navigation
   // surface from both the image workspace and the native conversation.
   const historyPanel = (
     <aside className={css.history} data-dsh-imagegen-history>
       <header className={css.historyHeader}>
-        <span className={css.historyTitle}>{tt('history.title')}</span>
+        <span className={css.historyTitle}>{tt('tasks.title')}{activeTasks.length > 0 ? ` · ${activeTasks.length}` : ''}</span>
         <div className={css.historyHeaderActions}>
           <button
             type="button"
@@ -1942,11 +1989,11 @@ export function ImageGenPanel(props: {
         <input className={css.historySearch} value={historyQuery} onChange={event => { setHistoryQuery(event.target.value) }} placeholder={tt('history.search')} aria-label={tt('history.search')} />
         <Select value={historyModelFilter} onChange={value => { setHistoryModelFilter(value) }} aria-label={tt('history.model')}>
           <option value="all">{tt('history.allModels')}</option>
-          {[...new Set(history.flatMap(entry => modelsOfHistoryEntry(entry)))].map(option => <option key={option} value={option}>{option}</option>)}
+          {[...new Set(taskHistory.flatMap(entry => modelsOfHistoryEntry(entry)))].map(option => <option key={option} value={option}>{option}</option>)}
         </Select>
         <Select value={historyRatioFilter} onChange={value => { setHistoryRatioFilter(value) }} aria-label={tt('history.ratio')}>
           <option value="all">{tt('history.allRatios')}</option>
-          {[...new Set(history.map(entry => normalizeSize(entry.size)))].map(option => <option key={option} value={option}>{option}</option>)}
+          {[...new Set(taskHistory.map(entry => normalizeSize(entry.size)))].map(option => <option key={option} value={option}>{option}</option>)}
         </Select>
       </div>
 
@@ -1969,6 +2016,7 @@ export function ImageGenPanel(props: {
                   type="button"
                   className={css.historyMain}
                   data-dsh-imagegen-history-main=""
+                  disabled={imageCount === 0}
                   onClick={() => { void viewHistoryGroup(group) }}
                 >
                   {entry.images.length > 0 ? (
@@ -1990,6 +2038,33 @@ export function ImageGenPanel(props: {
                     </span>
                   </span>
                 </button>
+                <details className={css.taskDetails}>
+                  <summary>{tt('tasks.details')} · {group.entries.map(item => tt(`tasks.${item.status ?? 'completed'}` as never)).join(' / ')}</summary>
+                  {group.entries.map(item => {
+                    const live = tasks.find(task => task.id === item.taskId)
+                    return <div key={item.id} className={css.taskDetailEntry}>
+                      <dl className={css.taskInputs}>
+                        <dt>ID</dt><dd>{item.taskId ?? item.id}</dd>
+                        <dt>{tt('history.model')}</dt><dd>{item.model}{item.upstream && item.upstream !== item.model ? ` → ${item.upstream}` : ''}</dd>
+                        <dt>{tt('tasks.channel')}</dt><dd>{item.channel ?? item.channelId ?? '—'}</dd>
+                        <dt>{tt('history.ratio')}</dt><dd>{item.size}</dd>
+                        <dt>{tt('tasks.requested')}</dt><dd>{item.n} / {item.images.length}</dd>
+                        <dt>{tt('tasks.started')}</dt><dd>{formatTime(item.startedAt ?? item.createdAt)}</dd>
+                        <dt>{tt('tasks.finished')}</dt><dd>{item.finishedAt === undefined ? '—' : formatTime(item.finishedAt)}</dd>
+                      </dl>
+                      <p className={css.taskInputPrompt}>{item.prompt}</p>
+                      {item.error ? <p className={css.taskError}>{item.error}</p> : null}
+                      {(item.references?.length ?? 0) > 0 ? <><strong>{tt('tasks.references')}</strong><div className={css.taskImages}>{item.references!.map((image, index) => <a key={index} href={image.url} target="_blank" rel="noreferrer"><img src={image.url} alt={`${tt('tasks.references')} ${index + 1}`} loading="lazy" /></a>)}</div></> : null}
+                      {item.images.length > 0 ? <><strong>{tt('tasks.results')}</strong><div className={css.taskImages}>{item.images.map((image, index) => <button key={index} type="button" title={`${tt('tasks.results')} ${index + 1}`} onClick={() => { void historyImagesToGenerated(item.images).then(images => { openPreview(images, index) }).catch(caught => { setError(errorMessage(caught)) }) }}><img src={image.url} alt={`${tt('tasks.results')} ${index + 1}`} loading="lazy" /></button>)}</div></> : null}
+                      <div className={css.taskDetailActions}>
+                        <button type="button" onClick={() => { void restoreTaskInputs(item) }}>{tt('tasks.restore')}</button>
+                        <button type="button" onClick={() => { void copyPreviewPrompt(item.prompt) }}>{tt(promptCopied ? 'preview.copied' : 'preview.copyPrompt')}</button>
+                        {live?.status === 'queued' || live?.status === 'running' ? <button type="button" onClick={() => { void api.taskCancel(live.id).catch(caught => { setError(errorMessage(caught)) }) }}>{tt('tasks.cancel')}</button> : null}
+                        {live?.status === 'failed' || live?.status === 'cancelled' ? <button type="button" onClick={() => { void api.taskRetry(live.id).catch(caught => { setError(errorMessage(caught)) }) }}>{tt('tasks.retry')}</button> : null}
+                      </div>
+                    </div>
+                  })}
+                </details>
                 <span className={css.historyActions}>
                   {entry.images.length > 0 ? (
                     <button
@@ -2033,6 +2108,7 @@ export function ImageGenPanel(props: {
                     type="button"
                     className={css.historyIconAction}
                     data-danger
+                    disabled={group.entries.some(item => !history.some(record => record.id === item.id))}
                     title={tt('history.delete')}
                     aria-label={tt('history.delete')}
                     onClick={() => { void deleteHistoryGroup(group) }}
@@ -2479,10 +2555,11 @@ export function ImageGenPanel(props: {
                     <div className={css.reference}>
                       <img className={css.referenceImage} src={refImage.dataUrl} alt={refImage.name} />
                       <div className={css.referenceActions}>
+                        {extraReferences.length > 0 ? <span>{tt('tasks.references')} · {extraReferences.length + 1}</span> : null}
                         <Button variant="outline" size="sm" onClick={() => { fileInput.current?.click() }}>
                           {tt('edit.change')}
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => { setRefImage(null) }}>
+                        <Button variant="outline" size="sm" onClick={() => { setRefImage(null); setExtraReferences([]) }}>
                           {tt('edit.remove')}
                         </Button>
                       </div>
@@ -2878,28 +2955,6 @@ export function ImageGenPanel(props: {
                 </div>
               )}
             </div>
-          ) : null}
-          {!isGallery && tasks.length > 0 ? (
-            <section className={css.taskTray} data-open={taskTrayOpen ? 'true' : 'false'} aria-label={tt('tasks.title')}>
-              <header className={css.taskTrayHeader}>
-                <button type="button" className={css.taskTrayToggle} aria-expanded={taskTrayOpen} onClick={() => { setTaskTrayOpen(open => !open) }}>
-                  <span>{tt('tasks.title')}</span>
-                  <span className={css.taskTrayCount}>{activeTasks.length}</span>
-                  <span className={css.taskTrayChevron} aria-hidden="true">{taskTrayOpen ? '⌃' : '⌄'}</span>
-                </button>
-                {taskTrayOpen ? <button type="button" className={css.taskTrayClose} aria-label={tt('preview.close')} onClick={() => { setTaskTrayOpen(false) }}>×</button> : null}
-              </header>
-              <div className={css.taskRows}>
-                {tasks.slice(0, 5).map(task => (
-                  <div key={task.id} className={css.taskRow} data-status={task.status}>
-                    <span className={css.taskStatus}>{tt(`tasks.${task.status}` as never)}</span>
-                    <span className={css.taskPrompt}>{task.request.prompt}</span>
-                    {(task.status === 'queued' || task.status === 'running') ? <button type="button" onClick={() => { void api.taskCancel(task.id) }}>{tt('tasks.cancel')}</button> : null}
-                    {task.status === 'failed' || task.status === 'cancelled' ? <button type="button" onClick={() => { void api.taskRetry(task.id) }}>{tt('tasks.retry')}</button> : null}
-                  </div>
-                ))}
-              </div>
-            </section>
           ) : null}
           {workspace === 'normal' && tab !== 'gallery' && comparison !== null ? (
             <section className={css.comparisonBoard} aria-label={tt('compare.title')}>

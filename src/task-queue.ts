@@ -12,8 +12,9 @@ export class GenerationTaskQueue {
   private running = 0
 
   constructor(
-    private readonly run: (request: GenerateRequest, signal: AbortSignal) => Promise<GenerateResult>,
+    private readonly run: (request: GenerateRequest, signal: AbortSignal, task: GenerationTask) => Promise<GenerateResult>,
     private readonly concurrency = 1,
+    private readonly persistQueuedCancellation?: (task: GenerationTask) => Promise<void>,
   ) {}
 
   list(): GenerationTask[] {
@@ -57,6 +58,12 @@ export class GenerationTaskQueue {
     task.status = 'cancelled'
     task.finishedAt = Date.now()
     this.controllers.get(id)?.abort()
+    if (task.startedAt === undefined && this.persistQueuedCancellation !== undefined) {
+      void this.persistQueuedCancellation(this.snapshot(task)).catch(error => {
+        task.error = `任务记录保存失败：${error instanceof Error ? error.message : String(error)}`
+        this.publish(task)
+      })
+    }
     this.publish(task)
     this.drain()
     return this.snapshot(task)
@@ -89,7 +96,7 @@ export class GenerationTaskQueue {
     const controller = new AbortController()
     this.controllers.set(task.id, controller)
     try {
-      const result = await this.run(task.request, controller.signal)
+      const result = await this.run(task.request, controller.signal, this.snapshot(task))
       if (this.tasks.find(item => item.id === task.id)?.status !== 'cancelled') {
         task.status = 'completed'
         task.result = result

@@ -1088,8 +1088,19 @@ export interface HistoryImageRef {
   revisedPrompt?: string
 }
 
+/** Persisted task metadata shared by history input and output. */
+export interface HistoryTaskMeta {
+  taskId?: string
+  status?: GenerationTaskStatus
+  error?: string
+  startedAt?: number
+  finishedAt?: number
+  upstream?: string
+}
+
 /** A saved generation as the browser consumes it (metadata + served images). */
-export interface HistoryEntry extends EcommerceTaskMeta {
+export interface HistoryEntry extends EcommerceTaskMeta, HistoryTaskMeta {
+  references?: HistoryImageRef[]
   id: string
   createdAt: number
   mode: GenerateMode
@@ -1116,7 +1127,8 @@ export interface HistoryEntry extends EcommerceTaskMeta {
 }
 
 /** A history entry the client submits for persistence (images still carry base64). */
-export interface HistoryEntryInput extends EcommerceTaskMeta {
+export interface HistoryEntryInput extends EcommerceTaskMeta, HistoryTaskMeta {
+  references?: GeneratedImage[]
   id: string
   createdAt: number
   mode: GenerateMode
