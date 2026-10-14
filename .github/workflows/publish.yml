@@ -37,7 +37,7 @@ jobs:
 
       - name: Validate package metadata
         run: |
-          test "$(node -p "require('./package.json').name")" = "@wx-11/dsh-imagegen"
+          test "$(node -p "require('./package.json').name")" = "@superdsh/dsh-imagegen"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
           fi

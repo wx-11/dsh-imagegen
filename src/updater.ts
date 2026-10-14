@@ -5,7 +5,7 @@ import { PLUGIN_VERSION } from './protocol.ts'
 
 /** Keep this in sync with package.json for each published release. */
 export const CURRENT_VERSION = PLUGIN_VERSION
-export const PACKAGE_NAME = '@wx-11/dsh-imagegen'
+export const PACKAGE_NAME = '@superdsh/dsh-imagegen'
 export const RELEASES_URL = 'https://api.github.com/repos/wx-11/dsh-imagegen/releases/latest'
 
 const CHECK_TIMEOUT_MS = 10_000

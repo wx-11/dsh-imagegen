@@ -1,5 +1,5 @@
 /**
- * Standalone smoke test for the built @wx-11/dsh-imagegen artifacts:
+ * Standalone smoke test for the built @superdsh/dsh-imagegen artifacts:
  *
  *  A. host half loads and exposes the plugin contract
  *  B. generate engine works against a mock OpenAI-compatible upstream
@@ -3009,7 +3009,7 @@ await check('D1 client bundle registers via __ModuleLoader__ and exposes the can
   sandbox.window.window = sandbox.window
   vm.runInNewContext(source, sandbox, { filename: 'client.js' })
   assert.ok(handoff !== undefined, 'load() was called')
-  assert.equal(handoff.id, '@wx-11/dsh-imagegen')
+  assert.equal(handoff.id, '@superdsh/dsh-imagegen')
   assert.equal(typeof handoff.factory, 'function')
   // Evaluate the factory with stubbed platform modules; only the exports
   // surface is exercised (apply never runs without a real DOM). The react

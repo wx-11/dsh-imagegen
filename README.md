@@ -1,9 +1,9 @@
 # dsh-imagegen
 
 <div align="center">
-  <a href="https://www.npmjs.com/package/@wx-11/dsh-imagegen"><img src="https://img.shields.io/npm/v/@wx-11/dsh-imagegen?color=cb3837&logo=npm&label=npm" alt="npm" /></a>
+  <a href="https://www.npmjs.com/package/@superdsh/dsh-imagegen"><img src="https://img.shields.io/npm/v/@superdsh/dsh-imagegen?color=cb3837&logo=npm&label=npm" alt="npm" /></a>
   &nbsp;
-  <a href="https://www.npmjs.com/package/@wx-11/dsh-imagegen"><img src="https://badgen.net/npm/dt/@wx-11/dsh-imagegen?label=downloads&color=blue" alt="npm total downloads" /></a>
+  <a href="https://www.npmjs.com/package/@superdsh/dsh-imagegen"><img src="https://badgen.net/npm/dt/@superdsh/dsh-imagegen?label=downloads&color=blue" alt="npm total downloads" /></a>
   &nbsp;
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6.svg" alt="License" /></a>
   &nbsp;
@@ -20,7 +20,7 @@
 需要已安装 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 和 Node.js 20+。
 
 ```bash
-dsh plugin --profile web add @wx-11/dsh-imagegen
+dsh plugin --profile web add @superdsh/dsh-imagegen
 ```
 
 安装后重启 `dsh web`，侧边栏会出现「生图」入口。到「设置 → 生图配置」添加提供方、填写 API 地址与密钥、检测并选择生图模型，保存后即可开始创作。Windows 若遇 PowerShell 脚本策略限制，请使用 `dsh.cmd`。
@@ -29,7 +29,7 @@ dsh plugin --profile web add @wx-11/dsh-imagegen
 <summary><b>其他安装方式、升级与回滚</b></summary>
 
 - **让 Agent 安装：**把上面的安装命令发给 DSH、Codex 或其他 coding agent。
-- **指定版本：**使用 `@wx-11/dsh-imagegen@<版本号>`，或从 [GitHub Releases](https://github.com/wx-11/dsh-imagegen/releases) 下载 tgz 后安装。
+- **指定版本：**使用 `@superdsh/dsh-imagegen@<版本号>`，或从 [GitHub Releases](https://github.com/wx-11/dsh-imagegen/releases) 下载 tgz 后安装。
 - **升级：**重复执行 `add` 命令；插件也会在面板中提示新版本。更新后重启 `dsh web`。
 - 渠道配置、历史记录和画廊数据保存在 DSH 宿主侧，正常升级不会清空。
 

@@ -1,5 +1,5 @@
 /**
- * Standalone tsdown build for @wx-11/dsh-imagegen.
+ * Standalone tsdown build for @superdsh/dsh-imagegen.
  *
  * Replicates the dsh client-bundle contract (packages/client/tsdown.client.ts
  * preset) so the package builds without depending on the dsh monorepo:
@@ -17,7 +17,7 @@ import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
 
 /** Plugin id (package name) stamped into the __ModuleLoader__.load handoff. */
-const ID = '@wx-11/dsh-imagegen'
+const ID = '@superdsh/dsh-imagegen'
 
 /**
  * The module specifiers the web shell shares into the frozen module table
