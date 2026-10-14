@@ -48,6 +48,16 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify npm publishing account
+        run: |
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "::error::Configure the NPM_TOKEN repository secret with an npm publishing token."
+            exit 1
+          fi
+          npm whoami --registry=https://registry.npmjs.org > /dev/null
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish to npm
         run: pnpm publish --access public --no-git-checks
         env:
