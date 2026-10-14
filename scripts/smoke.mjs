@@ -243,9 +243,8 @@ const upstream = createServer(async (req, res) => {
       assert.equal(body.aspect_ratio, '1:1')
       assert.equal(body.response_format, 'b64_json')
     }
-    // The engine never sends `n`: Responses-API gateways reject the batch
-    // parameter, so the requested count is satisfied by parallel requests.
-    assert.equal(body.n, undefined)
+    if (body.model === 'gpt-image-2') assert.ok(body.n >= 1 && body.n <= 100)
+    else assert.equal(body.n, undefined)
     assert.equal(body.detail, undefined)
     if (body.prompt === 'parallel one' || body.prompt === 'parallel two') {
       activeGenerationRequests += 1
@@ -277,7 +276,7 @@ const upstream = createServer(async (req, res) => {
     assert.ok(body.includes('name="prompt"') && (body.includes('edit this') || commandEdit), 'prompt part missing')
     assert.ok(body.includes('name="model"') && body.includes('gpt-image-2'), 'model part missing')
     if (!commandEdit) assert.ok(body.includes('name="size"') && body.includes('1536x1024'), 'size part missing')
-    assert.ok(!body.includes('name="n"'), 'n must not be sent (batch param rejected)')
+    assert.ok(body.includes('name="n"'), 'native image count must be sent')
     assert.ok(body.includes('name="image"'), 'image part missing')
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ data: [{ b64_json: pngBytes.toString('base64') }] }))
@@ -850,8 +849,9 @@ await check('B10 async two-step providers submit, poll, and flatten URL arrays',
       { apiUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'async-key' },
       { mode: 'text', model: 'gpt-image-2', prompt: 'async image', size: '1:1', quality: 'auto', n: 2, detail: '' },
     )
-    assert.equal(submissions.length, 2, 'one upstream task is submitted for each requested image')
-    assert.equal(result.images.length, 4, 'each completed task URL array is flattened')
+    assert.equal(submissions.length, 1, 'native n uses one upstream task')
+    assert.equal(submissions[0].body.n, 2)
+    assert.equal(result.images.length, 2, 'completed task URL array is flattened')
     assert.ok(submissions.every(item => item.authorization === 'Bearer async-key'))
     assert.ok(submissions.every(item => item.modelScopeHeader === undefined), 'ordinary gateways do not receive ModelScope headers')
     assert.ok([...polls.values()].every(count => count >= 2), 'submitted tasks are polled until completed')

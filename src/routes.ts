@@ -334,7 +334,7 @@ function parseGenerateRequest(body: Record<string, unknown>): GenerateRequest | 
     n: normalizeImageCount(typeof body.n === 'number' ? body.n : 1),
     ...typeof body.image === 'string' && body.image !== '' ? { image: body.image } : {},
     ...Array.isArray(body.images)
-      ? { images: body.images.filter((item): item is string => typeof item === 'string' && item !== '').slice(0, 4) }
+      ? { images: body.images.filter((item): item is string => typeof item === 'string' && item !== '').slice(0, 7) }
       : {},
     ...typeof body.refName === 'string' && body.refName !== '' ? { refName: body.refName } : {},
     ...typeof body.channelId === 'string' && body.channelId !== '' ? { channelId: body.channelId } : {},

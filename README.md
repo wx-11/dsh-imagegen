@@ -107,6 +107,8 @@ dsh plugin --profile web add @superdsh/dsh-imagegen
 
 在「设置 → 生图配置」添加渠道，填写 API 地址与密钥，检测并选择生图模型。可配置多个提供方，并设置默认生图模型和可选的提示词增强聊天模型。
 
+chatgpt2api 图片任务接口：将渠道 API 地址填写为 `https://你的网关/v1/videos`，开启「完整 URL」，选择 Images 协议。文生图和图生图均使用 JSON 提交，以 `n` 一次请求 1–100 张图片，再自动轮询 `/v1/videos/{任务ID}`。比例通过 `aspect_ratio` 原样传递；选择「自动」则不传比例，不发送清晰度和细节参数。图生图最多支持 8 张参考图，最终显示服务端实际返回的所有图片。兼容图片接口 `/v1/images/generations` 和 `/v1/images/edits` 同样支持 `n` 与 202 异步任务响应。
+
 支持 OpenAI 兼容的 Images API / Chat Completions，以及 xAI Grok、Google Nano Banana、Seedream、Qwen-Image、GLM-Image、MiniMax 等预置渠道；也可手动添加兼容模型。
 
 <details>

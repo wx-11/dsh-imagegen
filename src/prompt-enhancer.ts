@@ -46,6 +46,13 @@ function modelListUrls(config: ModelListConfig): string[] {
   const base = config.apiUrl.trim().replace(/\/+$/, '')
   if (base === '') throw new Error('API URL is required')
   const urls: string[] = []
+  if (/\/videos\/?$/i.test(new URL(base).pathname)) {
+    const url = new URL(base)
+    url.pathname = url.pathname.replace(/\/videos\/?$/i, '/models')
+    url.search = ''
+    url.hash = ''
+    return [url.toString()]
+  }
   if (resolveChannelProtocol(base, config.protocol) === 'chat-completions' && isChatCompletionsUrl(base)) {
     const url = new URL(base)
     url.pathname = `${url.pathname.replace(/\/chat\/completions\/?$/, '')}/models`

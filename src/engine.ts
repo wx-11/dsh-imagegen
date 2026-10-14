@@ -325,11 +325,10 @@ function clampCount(n: number): number {
   return normalizeImageCount(n)
 }
 
-/** Pick the effective per-model request parameters. Never includes `n`: the
- *  batch parameter is rejected by Responses-API-based gateways (tools[0].n),
- *  so the count is satisfied by parallel single-image requests instead. */
+/** Pick the effective per-model request parameters. */
 function effectiveParams(request: GenerateRequest): {
   model: string
+  n?: number
   size?: string
   aspect_ratio?: string
   response_format?: string
@@ -384,6 +383,7 @@ function effectiveParams(request: GenerateRequest): {
   // OpenAI-compatible endpoints receive size only; omit quality and detail.
   return {
     model,
+    n: clampCount(request.n),
     ...request.size !== '' && request.size !== 'auto' && OPENAI_SIZE_BY_RATIO[request.size] !== undefined
       ? { size: OPENAI_SIZE_BY_RATIO[request.size] }
       : {},
@@ -684,16 +684,17 @@ async function pollAsyncTask(
   taskId: string,
   signal?: AbortSignal,
   modelScope = false,
+  taskPath = 'tasks',
 ): Promise<Array<Record<string, unknown>>> {
   const deadline = Date.now() + ASYNC_POLL_MAX_MS
-  let delay = 1000
+  let delay = taskPath === 'videos' ? 2000 : 1000
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now()
     const budget = requestSignal(signal, Math.min(ASYNC_POLL_REQUEST_TIMEOUT_MS, remaining))
     try {
       let response: Response
       try {
-        response = await fetch(`${baseUrl}/tasks/${encodeURIComponent(taskId)}`, {
+        response = await fetch(`${baseUrl}/${taskPath}/${encodeURIComponent(taskId)}`, {
           method: 'GET',
           headers: {
             authorization: `Bearer ${upstream.apiKey.trim()}`,
@@ -718,7 +719,9 @@ async function pollAsyncTask(
       }
       const record = payload as Record<string, unknown>
       const data = record.data
-      const statusRecord = Array.isArray(data) ? data[0] : data !== null && typeof data === 'object' ? data : record
+      const statusRecord = typeof record.status === 'string' || typeof record.task_status === 'string'
+        ? record
+        : Array.isArray(data) ? data[0] : data !== null && typeof data === 'object' ? data : record
       const statusValue = statusRecord !== null && typeof statusRecord === 'object'
         ? ((statusRecord as Record<string, unknown>).task_status ?? (statusRecord as Record<string, unknown>).status)
         : undefined
@@ -738,6 +741,11 @@ async function pollAsyncTask(
       if (ASYNC_COMPLETED_STATUSES.has(status) || images !== undefined) {
         const items = Array.isArray(images) ? images.flatMap(imageItemsOf) : imageItemsOf(images)
         if (items.length > 0) return items
+        const records = dataRecordsOf(record)
+        if (ASYNC_COMPLETED_STATUSES.has(status) && records !== undefined && records.length > 0) {
+          return records.map(item => ({ revised_prompt: record.revised_prompt, ...item }))
+        }
+        if (ASYNC_COMPLETED_STATUSES.has(status) && typeof record.url === 'string' && record.url !== '') return [record]
         if (ASYNC_COMPLETED_STATUSES.has(status)) throw new ImageGenError('上游异步任务完成但没有图片结果', 'upstream-empty')
       }
       if (status !== '' && !ASYNC_PENDING_STATUSES.has(status) && !ASYNC_COMPLETED_STATUSES.has(status)) {
@@ -753,8 +761,7 @@ async function pollAsyncTask(
 }
 
 /**
- * Issue one single-image request (never sends `n`). The response is kept as a
- * list so a gateway that happens to return several images per call still works.
+ * Issue one image request and normalize all returned images, including async tasks.
  */
 async function requestOneImage(
   baseUrl: string,
@@ -764,12 +771,31 @@ async function requestOneImage(
   signal?: AbortSignal,
 ): Promise<GeneratedImage[]> {
   const modelScope = isModelScopeInference(baseUrl)
+  const videos = /\/videos\/?$/i.test(new URL(baseUrl).pathname)
   const headers: Record<string, string> = {
     authorization: `Bearer ${upstream.apiKey.trim()}`,
     ...(modelScope ? { 'X-ModelScope-Async-Mode': 'true' } : {}),
   }
   let body: BodyInit
-  if (request.mode === 'edit') {
+  if (videos) {
+    const references = [request.image, ...(request.images ?? [])]
+      .filter((image): image is string => typeof image === 'string' && image !== '')
+    if (request.mode === 'edit' && references.length === 0) {
+      throw new ImageGenError('图生图需要上传参考图片', 'edit-image-missing')
+    }
+    if (request.mode === 'edit' && references.length > 8) {
+      throw new ImageGenError('此接口最多支持 8 张参考图片', 'edit-image-too-many')
+    }
+    headers['content-type'] = 'application/json'
+    body = JSON.stringify({
+      model: params.model,
+      prompt: request.prompt,
+      n: clampCount(request.n),
+      ...request.size !== '' && request.size !== 'auto' ? { aspect_ratio: request.size } : {},
+      ...request.mode === 'edit' ? { images: references } : {},
+      response_format: 'b64_json',
+    })
+  } else if (request.mode === 'edit') {
     if (typeof request.image !== 'string' || request.image === '') {
       throw new ImageGenError('图生图需要上传参考图片', 'edit-image-missing')
     }
@@ -838,6 +864,7 @@ async function requestOneImage(
       form.append('prompt', request.prompt)
       form.append('model', params.model)
       if (params.size !== undefined) form.append('size', params.size)
+      if (params.n !== undefined) form.append('n', String(params.n))
       body = form
     }
   } else {
@@ -853,7 +880,7 @@ async function requestOneImage(
       const endpoint = request.mode === 'edit' && !isSeedream(params.model)
         ? '/images/edits'
         : '/images/generations'
-      response = await fetch(endpointUrl(upstream, baseUrl, endpoint), {
+      response = await fetch(videos ? baseUrl : endpointUrl(upstream, baseUrl, endpoint), {
         method: 'POST',
         headers,
         body,
@@ -880,6 +907,15 @@ async function requestOneImage(
     }
 
     const record = payload as Record<string, unknown>
+    const taskId = typeof record.id === 'string' ? record.id.trim() : ''
+    if (taskId !== '' && (videos || response.status === 202 || typeof record.status === 'string')) {
+      const taskUrl = new URL(baseUrl)
+      taskUrl.pathname = taskUrl.pathname.replace(/\/(?:videos|images\/(?:generations|edits))\/?$/i, '')
+      taskUrl.search = ''
+      taskUrl.hash = ''
+      const taskItems = await pollAsyncTask(taskUrl.toString().replace(/\/$/, ''), upstream, taskId, signal, false, videos ? 'videos' : 'tasks')
+      return Promise.all(taskItems.flatMap(imageItemsOf).map(item => normalizeItem({ revised_prompt: record.revised_prompt, ...item }, upstream, signal)))
+    }
     const modelScopeTaskId = modelScope && typeof record.task_id === 'string' ? record.task_id.trim() : ''
     if (modelScopeTaskId !== '') {
       const taskBaseUrl = modelScopeTaskBaseUrl(baseUrl, upstream.apiUrlFull === true)
@@ -900,7 +936,7 @@ async function requestOneImage(
       if (asyncRecords.length === 0) throw new ImageGenError('上游异步任务完成但没有图片结果', 'upstream-empty')
       return Promise.all(asyncRecords.flatMap(imageItemsOf).map(item => normalizeItem(item, upstream, signal)))
     }
-    return Promise.all(data.flatMap(imageItemsOf).map(item => normalizeItem(item, upstream, signal)))
+    return Promise.all(data.flatMap(imageItemsOf).map(item => normalizeItem({ revised_prompt: record.revised_prompt, ...item }, upstream, signal)))
   } finally {
     budget.dispose()
   }
@@ -1212,10 +1248,8 @@ async function generateChatCompletionImages(
 }
 
 /**
- * Forward one generate request to the configured endpoint. The requested image
- * count is satisfied with N parallel single-image requests (the `n` batch
- * parameter is never sent, because Responses-API-based gateways reject it as
- * `tools[0].n`), then the results are flattened in order.
+ * Forward one generation request. Generic image APIs batch via `n`; provider
+ * contracts that only support single-image calls use bounded parallel batches.
  */
 export async function generateImage(upstream: UpstreamConfig, request: GenerateRequest, options: { signal?: AbortSignal } = {}): Promise<GenerateResult> {
   const configuredBaseUrl = upstream.apiUrl.trim().replace(/\/+$/, '')
@@ -1244,6 +1278,10 @@ export async function generateImage(upstream: UpstreamConfig, request: GenerateR
     }
   }
   const params = effectiveParams(request)
+  if (isModelScopeInference(baseUrl)) delete params.n
+  if (params.n !== undefined || /\/videos\/?$/i.test(new URL(baseUrl).pathname)) {
+    return { images: await requestOneImage(baseUrl, upstream, request, params, options.signal) }
+  }
   const count = effectiveCount(request)
   const batches = await imageBatches(count, () => requestOneImage(baseUrl, upstream, request, params, options.signal))
   return { images: batches.flat() }

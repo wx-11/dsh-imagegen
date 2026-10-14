@@ -13,20 +13,21 @@ const server = createServer(async (req, res) => {
   assert.equal(body.detail, undefined)
   assert.equal(body.resolution, undefined)
   assert.equal(body.image_size, undefined)
-  assert.equal(body.n, undefined)
+  if (body.model === 'gpt-image-2') assert.ok(body.n >= 1 && body.n <= 100)
+  else assert.equal(body.n, undefined)
   if (body.model === 'gpt-image-2') assert.equal(body.size, '1024x1280')
   else assert.equal(body.aspect_ratio, '4:5')
   calls++; active++; peak = Math.max(peak, active)
   await new Promise(resolve => setTimeout(resolve, 2)); active--
   res.setHeader('content-type', 'application/json')
-  res.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY4sAAAAASUVORK5CYII=' }] }))
+  res.end(JSON.stringify({ data: Array.from({ length: body.n ?? 1 }, () => ({ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY4sAAAAASUVORK5CYII=' })) }))
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 try {
   for (const count of [1, 2, 5, 10, 50, 100, 7]) {
     calls = 0; peak = 0
     const result = await generateImage({ apiUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: 'fixture' }, { mode: 'text', model: 'gpt-image-2', prompt: 'fixture', size: '4:5', n: count, quality: '4k', detail: 'high' })
-    assert.equal(result.images.length, count); assert.equal(calls, count); assert.ok(peak <= 4)
+    assert.equal(result.images.length, count); assert.equal(calls, 1); assert.equal(peak, 1)
   }
   for (const model of ['grok-imagine-image', 'nanobanana2']) {
     const result = await generateImage({ apiUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: 'fixture' }, { mode: 'text', model, prompt: 'fixture', size: '4:5', n: 1, quality: '4k', detail: 'high' })
@@ -35,5 +36,5 @@ try {
   let attempts = 0
   await assert.rejects(imageBatches(10, async () => { attempts++; throw new Error('fixture failure') }), /fixture failure/)
   assert.equal(attempts, 4)
-  console.log('PASS counts=1,2,5,10,50,100,7; maxConcurrency=4; ratio=4:5; quality/detail omitted; failed batches stop')
+  console.log('PASS native n=1,2,5,10,50,100,7; one submission; ratio=4:5; quality/detail omitted; failed batches stop')
 } finally { await new Promise(resolve => server.close(resolve)) }
