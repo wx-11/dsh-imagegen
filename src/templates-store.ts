@@ -7,7 +7,7 @@
  * Sources never mix — the overlay shows one tab per source and every request
  * names the source explicitly.
  *
- * Each case list ships as a bundled snapshot (src/templates/<file>, inside the
+ * Each case list ships as a bundled snapshot (lib/templates/<file>, inside the
  * npm package) so every library works offline out of the box; a successful
  * refresh (manual, or the periodic background sync) writes a runtime copy
  * under ~/.dsh/dsh-imagegen/templates/<sourceId>/ which then takes precedence.
@@ -58,35 +58,35 @@ interface TemplateSourceDef {
 const SOURCE_DEFS: Record<string, TemplateSourceDef> = {
   'image-prompts': {
     listUrl: 'https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/prompts.json',
-    bundledPath: fileURLToPath(new URL('../src/templates/image-prompts-cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/image-prompts-cases.json', import.meta.url)),
     allowedImageHosts: ['raw.githubusercontent.com', 'cms-assets.youmind.com', 'pbs.twimg.com', 'cdn.imgedify.com', 'camo.githubusercontent.com', 'cdn.jsdelivr.net', 'github.com', 'linux.do', 'i.mji.rip', 'storage.googleapis.com'],
     imageUrls: githubImageUrls,
   },
   vibeui: {
     listUrl: 'https://vibeui.top/extra/awesome-gpt-image-2/data/cases.json',
     imageBaseUrl: 'https://vibeui.top/extra/awesome-gpt-image-2/data/images/',
-    bundledPath: fileURLToPath(new URL('../src/templates/cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/cases.json', import.meta.url)),
     legacySnapshotPath: 'legacy',
     legacyImageDir: 'legacy',
   },
   canghe: {
     listUrl: 'https://gpt-image2.canghe.ai/cases.json',
     imageBaseUrl: 'https://gpt-image2.canghe.ai/images/',
-    bundledPath: fileURLToPath(new URL('../src/templates/canghe-cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/canghe-cases.json', import.meta.url)),
   },
   handraw: {
-    bundledPath: fileURLToPath(new URL('../src/templates/handraw-cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/handraw-cases.json', import.meta.url)),
     refreshable: false,
     allowedImageHosts: ['cdn.jsdelivr.net', 'raw.githubusercontent.com'],
     imageUrls: githubImageUrls,
   },
   'prompt-signal': {
-    bundledPath: fileURLToPath(new URL('../src/templates/prompt-signal-cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/prompt-signal-cases.json', import.meta.url)),
     refreshable: false,
     allowedImageHosts: ['raw.githubusercontent.com', 'pbs.twimg.com', 'mosaic.fxtwitter.com'],
   },
   evolink: {
-    bundledPath: fileURLToPath(new URL('../src/templates/evolink-cases.json', import.meta.url)),
+    bundledPath: fileURLToPath(new URL('./templates/evolink-cases.json', import.meta.url)),
     refreshable: false,
     allowedImageHosts: ['raw.githubusercontent.com'],
   },

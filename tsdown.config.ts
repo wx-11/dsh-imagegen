@@ -11,7 +11,7 @@
  *    Modules are compiled by lightningcss and injected as <style> tags).
  */
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { basename, dirname, resolve as resolvePath } from 'node:path'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
@@ -52,7 +52,20 @@ const nodeConfig: UserConfig = {
   target: 'es2024',
   fixedExtension: false,
   dts: false,
+  sourcemap: false,
   clean: true,
+  plugins: [{
+    name: 'dsh-template-snapshots',
+    async generateBundle() {
+      const directory = resolvePath('src/templates')
+      for (const file of await readdir(directory)) {
+        if (!file.endsWith('.json')) continue
+        const fullPath = resolvePath(directory, file)
+        this.addWatchFile(fullPath)
+        this.emitFile({ type: 'asset', fileName: `templates/${file}`, source: await readFile(fullPath) })
+      }
+    },
+  }],
   outputOptions: {
     entryFileNames: '[name].js',
   },
@@ -78,7 +91,7 @@ const clientConfig: UserConfig = {
   format: 'cjs',
   platform: 'browser',
   dts: false,
-  sourcemap: true,
+  sourcemap: false,
   clean: false,
   deps: {
     // Platform modules resolve from the injected require (loader module

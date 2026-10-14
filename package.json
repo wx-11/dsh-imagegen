@@ -65,10 +65,9 @@
     "typescript": "~5.7.2"
   },
   "files": [
-    "lib",
-    "src",
+    "lib/**/*.js",
+    "lib/templates/*.json",
     "cordis.patch.yml",
-    "docs",
     "README.md",
     "THIRD_PARTY_NOTICES.md"
   ],

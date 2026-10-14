@@ -181,3 +181,7 @@ dsh plugin --profile web add ./dickpy-dsh-imagegen-<版本>.tgz
 - **模板图片缓存目录**：单独保存模板库、全部、收藏、灵感墙及详情图片缓存，例如 `D:\dsh-imagegen-cache`；留空时使用本地图片存储目录下的 `template-images`。各界面缓存状态继续独立。
 
 默认数据位置为 `DSH_HOME/dsh-imagegen`，未设置 `DSH_HOME` 时为用户目录下的 `.dsh/dsh-imagegen`，Windows 通常位于 C 盘。保存设置后后续下载使用新目录。现有文件不自动搬迁；切换本地存储目录后，要继续访问旧历史，需要将原数据目录的内容复制到新目录。只改模板缓存目录不影响生成历史。
+
+### npm 发布内容
+
+npm 安装包仅包含构建后的 `lib/**/*.js`、`lib/templates/*.json`、Cordis 插件声明、第三方声明及 npm 自动附带的包信息、README 和许可证。源码 `src/`、文档目录和源码映射不发布。运行 `pnpm build` 后，可用 `node scripts/package-test.mjs` 验证实际 tgz 不含源码且所有模板快照可独立加载；发布 Action 也会执行此检查。
