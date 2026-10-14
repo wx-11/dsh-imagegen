@@ -1,3 +1,4 @@
+import { normalizeImageCount } from './image-options.ts'
 /**
  * The /api/dsh-imagegen route family: a loopback-only settings bridge for the
  * plugin's own namespace (describe/mutate, mirroring the dsh-web-ui family
@@ -330,9 +331,7 @@ function parseGenerateRequest(body: Record<string, unknown>): GenerateRequest | 
     model: typeof body.model === 'string' ? body.model : '',
     prompt,
     size: typeof body.size === 'string' ? body.size : 'auto',
-    quality: typeof body.quality === 'string' ? body.quality : 'auto',
-    n: typeof body.n === 'number' ? body.n : 1,
-    detail: typeof body.detail === 'string' ? body.detail : '',
+    n: normalizeImageCount(typeof body.n === 'number' ? body.n : 1),
     ...typeof body.image === 'string' && body.image !== '' ? { image: body.image } : {},
     ...Array.isArray(body.images)
       ? { images: body.images.filter((item): item is string => typeof item === 'string' && item !== '').slice(0, 4) }
@@ -371,7 +370,7 @@ function parseHistoryEntryInput(body: Record<string, unknown>): HistoryEntryInpu
   if (typeof entry.id !== 'string' || typeof entry.createdAt !== 'number') return undefined
   if (entry.mode !== 'text' && entry.mode !== 'edit') return undefined
   if (typeof entry.model !== 'string' || typeof entry.prompt !== 'string') return undefined
-  if (typeof entry.size !== 'string' || typeof entry.quality !== 'string' || typeof entry.detail !== 'string') return undefined
+  if (typeof entry.size !== 'string') return undefined
   if (typeof entry.n !== 'number') return undefined
   if (!Array.isArray(entry.images)) return undefined
   const images: GeneratedImage[] = []
@@ -396,8 +395,8 @@ function parseHistoryEntryInput(body: Record<string, unknown>): HistoryEntryInpu
     model: entry.model,
     prompt: entry.prompt,
     size: entry.size,
-    quality: entry.quality,
-    detail: entry.detail,
+    quality: typeof entry.quality === 'string' ? entry.quality : 'auto',
+    detail: typeof entry.detail === 'string' ? entry.detail : '',
     n: entry.n,
     images,
     ...typeof entry.refName === 'string' ? { refName: entry.refName } : {},

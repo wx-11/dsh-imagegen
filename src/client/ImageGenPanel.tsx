@@ -35,12 +35,13 @@ import {
   type ChatImageEventDetail, type ConversationDraftAttachment, type ConversationService,
 } from './conversation-sync.ts'
 import { Select } from './Select.tsx'
+import { IMAGE_RATIOS, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
 import css from './panel.module.css'
 
 /** Size options, presented as aspect ratios (auto = let the model decide).
  *  The host maps each ratio onto the model's own vocabulary: aspect_ratio for
  *  Grok Imagine, the closest pixel size for OpenAI-compatible endpoints. */
-const SIZES = ['auto', '1:1', '3:4', '4:3', '9:16', '2:3', '3:2', '16:9', '21:9'] as const
+const SIZES = IMAGE_RATIOS
 
 /** Size option keys in the locale dictionary. */
 /** Re-check Releases while the panel stays open; the host caches for 15 minutes. */
@@ -57,14 +58,6 @@ const SIZE_KEYS: Record<string, 'size.auto' | 'size.square' | 'size.portrait34' 
   '16:9': 'size.wide169',
   '21:9': 'size.ultrawide21',
 }
-
-/** Quality options, shown as output-resolution tiers (auto = let the model
- *  decide). The host maps them: resolution for Grok, quality level for
- *  OpenAI-compatible endpoints (1k→low, 2k→medium, 4k→high). */
-const QUALITIES = ['auto', '1k', '2k', '4k'] as const
-
-/** Detail options ('' = omit the passthrough). */
-const DETAILS = ['', 'standard', 'high'] as const
 
 const REF_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 // The local DSH attachment backend defaults to a 2000px per-side limit. Keep
@@ -117,24 +110,13 @@ const LEGACY_SIZE_TO_RATIO: Record<string, string> = {
   '1024x1792': '9:16',
 }
 
-/** Legacy quality levels saved by older versions, mapped onto resolution. */
-const LEGACY_QUALITY_TO_RES: Record<string, string> = {
-  low: '1k',
-  medium: '2k',
-  high: '4k',
-}
-
 /** Normalize a saved size value into a current dropdown option. */
 function normalizeSize(value: string): string {
   if ((SIZES as readonly string[]).includes(value)) return value
   return LEGACY_SIZE_TO_RATIO[value] ?? 'auto'
 }
 
-/** Normalize a saved quality value into a current dropdown option. */
-function normalizeQuality(value: string): string {
-  if ((QUALITIES as readonly string[]).includes(value)) return value
-  return LEGACY_QUALITY_TO_RES[value] ?? 'auto'
-}
+
 
 function clampPreviewScale(scale: number): number {
   return Math.min(PREVIEW_SCALE_MAX, Math.max(PREVIEW_SCALE_MIN, scale))
@@ -538,6 +520,7 @@ export function ImageGenPanel(props: {
   conversation?: ConversationService
   /** The panel is visible; inactive panels keep state but defer optional work. */
   active?: boolean
+  onBack?: () => void
 }) {
   const { api, scope, sessions, conversation, active = true } = props
   const config = useConfig(scope)
@@ -635,9 +618,7 @@ export function ImageGenPanel(props: {
   }
   const [prompt, setPrompt] = useState('')
   const [size, setSize] = useState<string>('auto')
-  const [quality, setQuality] = useState<string>('auto')
   const [count, setCount] = useState(1)
-  const [detail, setDetail] = useState('')
   const [model, setModel] = useState<string>('')
   const [modelChannelId, setModelChannelId] = useState<string>('')
   const [compareEnabled, setCompareEnabled] = useState(false)
@@ -1181,9 +1162,7 @@ export function ImageGenPanel(props: {
       mode: tab === 'edit' ? 'edit' : 'text',
       prompt: promptText,
       size,
-      quality,
       n: count,
-      detail,
       ...tab === 'edit' && refImage !== null ? { image: refImage.dataUrl } : {},
       ...tab === 'edit' && refImage !== null ? { refName: refImage.name } : {},
     }
@@ -1233,9 +1212,7 @@ export function ImageGenPanel(props: {
         model: selectedChoice.model,
         prompt: ecommerceSlotPrompt(ecommerce, slot, index),
         size: ecommerce.size,
-        quality,
         n: 1,
-        detail,
         ...(selectedChoice.channelId === '' ? {} : { channelId: selectedChoice.channelId }),
         ...(asset !== undefined ? { image: asset.dataUrl, refName: asset.name } : {}),
         workflow: 'ecommerce' as const,
@@ -1322,8 +1299,6 @@ export function ImageGenPanel(props: {
           model: item.model,
           prompt: item.prompt,
           size: item.size,
-          quality: item.quality,
-          detail: item.detail,
           n: 1,
           ...item.channelId !== undefined ? { channelId: item.channelId } : {},
           workflow: 'ecommerce' as const,
@@ -1521,8 +1496,6 @@ export function ImageGenPanel(props: {
       model,
       prompt: prompt.trim(),
       size,
-      quality,
-      detail,
       ...refImage !== null ? { refName: refImage.name } : {},
     }
     setGalleryAdding(true)
@@ -1534,8 +1507,6 @@ export function ImageGenPanel(props: {
         model: source.model,
         prompt: source.prompt,
         size: source.size,
-        quality: source.quality,
-        detail: source.detail,
         n: 1,
         images: [image],
         ...source.refName === undefined ? {} : { refName: source.refName },
@@ -1572,8 +1543,6 @@ export function ImageGenPanel(props: {
           model: tt('gallery.uploadModel'),
           prompt: file.name.replace(/\.[a-z0-9]+$/i, ''),
           size: 'auto',
-          quality: 'auto',
-          detail: '',
           n: 1,
           images: [{ b64: separator >= 0 ? dataUrl.slice(separator + 1) : dataUrl, mime: file.type || 'image/png' }],
         })
@@ -1848,7 +1817,7 @@ export function ImageGenPanel(props: {
                 title={tt('preview.open')}
                 onClick={() => { openPreview(item.images, imageIndex) }}
               >
-                <img className={css.image} src={srcOf(image)} alt={`${group.label} ${imageIndex + 1}`} />
+                <img loading="lazy" className={css.image} src={srcOf(image)} alt={`${group.label} ${imageIndex + 1}`} />
                 <span className={css.ecommerceResultBadge}>{group.label}</span>
                 <span className={css.ecommerceTaskActions} onClick={event => event.stopPropagation()}>
                   <a className={css.ecommerceActionChip} href={srcOf(image)} download={`product-${item.slotKey || item.id}-${imageIndex + 1}.${extensionOf(image.mime)}`}>{tt('download')}</a>
@@ -2086,6 +2055,7 @@ export function ImageGenPanel(props: {
     <div className={css.panel}>
       <header className={css.panelHeader}>
         <span className={css.panelHeading}>
+          <button type="button" className={css.chatToggle} onClick={() => { if (workspace !== 'normal' || tab !== 'text') openTab('text'); else props.onBack?.() }}>← {tt('navigation.back')}</button>
           <h2 className={css.panelTitle}>{tt('panel.title')}</h2>
           <a
             className={css.githubLink}
@@ -2469,7 +2439,6 @@ export function ImageGenPanel(props: {
                     disabled={submitting}
                     onChange={choice => { setModelChannelId(choice.channelId); setModel(choice.model) }}
                   />
-                  <div className={css.optionRow}>{QUALITIES.map(option => <Pill key={option} active={quality === option} onClick={() => { setQuality(option) }} className={css.optionPill}>{tt(`quality.${option}` as const)}</Pill>)}</div>
                 </div>
                 <input
                   ref={ecommerceFileInput}
@@ -2584,22 +2553,7 @@ export function ImageGenPanel(props: {
                       onClick={() => { setSize(option) }}
                       className={css.optionPill}
                     >
-                      {tt(SIZE_KEYS[option] ?? 'size.auto')}
-                    </Pill>
-                  ))}
-                </div>
-              </div>
-              <div className={css.paramGroup}>
-                <span className={css.paramLabel}>{tt('params.quality')}</span>
-                <div className={css.optionRow}>
-                  {QUALITIES.map(option => (
-                    <Pill
-                      key={option}
-                      active={quality === option}
-                      onClick={() => { setQuality(option) }}
-                      className={css.optionPill}
-                    >
-                      {tt(`quality.${option}` as const)}
+                      {SIZE_KEYS[option] ? tt(SIZE_KEYS[option]) : option}
                     </Pill>
                   ))}
                 </div>
@@ -2607,33 +2561,18 @@ export function ImageGenPanel(props: {
               <div className={css.paramGroup}>
                 <span className={css.paramLabel}>{tt('params.count')}</span>
                 <div className={css.optionRow}>
-                  {[1, 2, 3, 4].map(option => (
+                  {IMAGE_COUNTS.map(option => (
                     <Pill
                       key={option}
                       active={count === option}
                       onClick={() => { setCount(option) }}
                       className={css.optionPill}
                     >
-                      {tt(`count.${option === 1 ? 'one' : option === 2 ? 'two' : option === 3 ? 'three' : 'four'}` as const)}
+                      {tt('canvas.countUnit', { count: option })}
                     </Pill>
                   ))}
                 </div>
-              </div>
-              <div className={css.paramGroup}>
-                <span className={css.paramLabel}>{tt('params.detail')}</span>
-                <div className={css.optionRow}>
-                  {DETAILS.map(option => (
-                    <Pill
-                      key={option === '' ? 'auto' : option}
-                      active={detail === option}
-                      onClick={() => { setDetail(option) }}
-                      className={css.optionPill}
-                    >
-                      {tt(option === '' ? 'detail.auto' : option === 'standard' ? 'detail.standard' : 'detail.high')}
-                    </Pill>
-                  ))}
-                </div>
-                <span className={css.paramHint}>{tt('detail.hint')}</span>
+                <label className={css.customCount}>{tt('params.customCount')}<input type="number" min={1} max={100} step={1} value={count} onChange={event => setCount(normalizeImageCount(Number(event.target.value)))} /></label>
               </div>
             </section>
             </>) : null}
@@ -3032,7 +2971,7 @@ export function ImageGenPanel(props: {
                   </span>
                 ) : null}
               </div>
-              <div className={css.grid} data-count={images.length}>
+              <div className={css.grid} data-count={images.length} data-many={images.length > 4 ? 'true' : undefined}>
                 {images.map((image, index) => (
                   <figure
                     key={index}
@@ -3049,6 +2988,7 @@ export function ImageGenPanel(props: {
                     }}
                   >
                     <img
+                      loading="lazy"
                       className={css.image}
                       src={srcOf(image)}
                       alt={image.revisedPrompt ?? `${tt('panel.title')} ${index + 1}`}
@@ -3130,7 +3070,9 @@ export function ImageGenPanel(props: {
 
       {comparisonFullscreen && comparison !== null ? createPortal(
         <div className={css.comparisonFullscreen} role="dialog" aria-modal="true" aria-label={tt('compare.title')} onClick={() => { setComparisonFullscreen(false) }}>
-          <button type="button" className={css.lightboxClose} aria-label={tt('preview.close')} onClick={() => { setComparisonFullscreen(false) }}>×</button>
+          <button type="button" className={css.lightboxTool} style={{ position: 'absolute', top: 16, left: 16, zIndex: 2 }} onClick={closePreview}>← {tt('navigation.back')}</button>
+            <button type="button" className={css.lightboxClose} aria-label={tt('preview.close')} onClick={() => { setComparisonFullscreen(false) }}>×</button>
+          <button type="button" className={css.lightboxTool} onClick={() => setComparisonFullscreen(false)}>← {tt('navigation.back')}</button>
           <div className={css.comparisonFullscreenGrid} onClick={event => { event.stopPropagation() }}>
             {comparisonResults.map(task => (
               <figure key={task.id}><figcaption>{task.request.model}</figcaption>{task.result!.images.map((image, index) => <img key={index} src={srcOf(image)} alt={task.request.model} />)}</figure>

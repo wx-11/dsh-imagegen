@@ -1,3 +1,4 @@
+import { normalizeImageCount, imageBatches } from './image-options.ts'
 /**
  * Upstream proxy engine: forwards a generate request to the configured
  * OpenAI-compatible image endpoint (/images/generations for text-to-image,
@@ -157,10 +158,8 @@ function isVolcSeedream(model: string): boolean {
 }
 
 /** Volcengine uses `size` for the output tier, not the panel's aspect ratio. */
-function seedreamSize(quality: string): string {
-  // Seedream 5.0 Pro currently caps at 2K; keep 4K requests valid by
-  // degrading them to the highest supported tier instead of sending 4K.
-  if (quality === '1k') return '1K'
+function seedreamSize(): string {
+  // Seedream requires a size tier; use its default supported output size.
   return '2K'
 }
 
@@ -211,6 +210,15 @@ const OPENAI_SIZE_BY_RATIO: Readonly<Record<string, string>> = {
   '3:2': '1536x1024',
   '16:9': '1792x1024',
   '21:9': '1792x1024',
+  '4:5': '1024x1280',
+  '5:4': '1280x1024',
+  '5:7': '1024x1440',
+  '7:5': '1440x1024',
+  '9:21': '1024x1792',
+  '1:2': '1024x1792',
+  '2:1': '1792x1024',
+  '1:3': '1024x1792',
+  '3:1': '1792x1024',
 }
 
 /** Panel ratios that need renaming for a model's vocabulary. Grok documents
@@ -314,8 +322,7 @@ function isSameOriginAsApi(value: string, apiUrl: string): boolean {
 
 /** Clamp the requested image count into the API-accepted range. */
 function clampCount(n: number): number {
-  if (!Number.isFinite(n)) return 1
-  return Math.min(4, Math.max(1, Math.round(n)))
+  return normalizeImageCount(n)
 }
 
 /** Pick the effective per-model request parameters. Never includes `n`: the
@@ -324,11 +331,7 @@ function clampCount(n: number): number {
 function effectiveParams(request: GenerateRequest): {
   model: string
   size?: string
-  quality?: string
-  detail?: string
   aspect_ratio?: string
-  image_size?: string
-  resolution?: string
   response_format?: string
 } {
   const model = wireModel(request)
@@ -338,36 +341,22 @@ function effectiveParams(request: GenerateRequest): {
     const size = (pixel !== undefined && DALLE3_SIZES.has(pixel)) ? pixel : '1024x1024'
     return { model, size }
   }
-  // Grok Imagine: the panel's aspect ratios are sent as-is (21:9 aliased to
-  // the documented 20:9), the clarity tiers become the resolution parameter
-  // (the API documents 1k / 2k only, so 4k falls back to 2k), and base64
-  // output keeps the temporary signed result URLs from expiring before the
-  // host downloads them.
+  // Grok aliases 21:9 to 20:9. Base64 output avoids expiring result URLs.
   if (isGrokImagine(model)) {
     return {
       model,
       ...request.size !== '' && request.size !== 'auto'
         ? { aspect_ratio: GROK_ASPECT_ALIASES[request.size] ?? request.size }
         : {},
-      ...request.quality !== '' && request.quality !== 'auto'
-        ? { resolution: request.quality === '4k' ? '2k' : request.quality }
-        : {},
       response_format: 'b64_json',
     }
   }
-  // Google Nano Banana: the panel's aspect ratios are sent as-is (the family
-  // documents 1:1 … 21:9 natively), the clarity tiers become image_size
-  // (1K / 2K / 4K — Gen 1 and 2-Lite are 1K-only upstream, but which gateway
-  // rejects higher tiers is its own call), and base64 output keeps any signed
-  // result URLs from expiring before the host downloads them.
+  // Nano Banana receives aspect ratios directly and returns base64 output.
   if (isNanoBanana(model)) {
     return {
       model,
       ...request.size !== '' && request.size !== 'auto'
         ? { aspect_ratio: request.size }
-        : {},
-      ...request.quality !== '' && request.quality !== 'auto'
-        ? { image_size: request.quality.toUpperCase() }
         : {},
       response_format: 'b64_json',
     }
@@ -379,40 +368,30 @@ function effectiveParams(request: GenerateRequest): {
   if (isSeedream(model)) {
     return {
       model,
-      size: seedreamSize(request.quality),
+      size: seedreamSize(),
       response_format: isVolcSeedream(model) ? 'url' : 'b64_json',
     }
   }
-  // Zhipu's official image API accepts OpenAI-style JSON but uses its own
-  // quality vocabulary. GLM-Image currently supports hd only; CogView uses
-  // the standard tier. Size remains a valid custom pixel size for both.
+  // Zhipu accepts OpenAI-style custom pixel sizes.
   if (isZhipuImage(model)) {
     return {
       model,
       ...request.size !== '' && request.size !== 'auto' && OPENAI_SIZE_BY_RATIO[request.size] !== undefined
         ? { size: OPENAI_SIZE_BY_RATIO[request.size] }
         : {},
-      quality: isGlmImage(model) ? 'hd' : 'standard',
     }
   }
-  // OpenAI-compatible endpoints: nearest pixel size, clarity tiers mapped to
-  // the quality levels (1k→low / 2k→medium / 4k→high), detail passthrough.
+  // OpenAI-compatible endpoints receive size only; omit quality and detail.
   return {
     model,
     ...request.size !== '' && request.size !== 'auto' && OPENAI_SIZE_BY_RATIO[request.size] !== undefined
       ? { size: OPENAI_SIZE_BY_RATIO[request.size] }
       : {},
-    ...request.quality === '1k' ? { quality: 'low' } : {},
-    ...request.quality === '2k' ? { quality: 'medium' } : {},
-    ...request.quality === '4k' ? { quality: 'high' } : {},
-    ...request.detail !== '' ? { detail: request.detail } : {},
   }
 }
 
 /** How many single-image requests to issue for the requested image count. */
 function effectiveCount(request: GenerateRequest): number {
-  const model = wireModel(request)
-  if (model === 'dall-e-3') return 1
   return clampCount(request.n)
 }
 
@@ -832,7 +811,6 @@ async function requestOneImage(
       form.append('prompt', request.prompt)
       form.append('model', params.model)
       if (params.aspect_ratio !== undefined) form.append('aspect_ratio', params.aspect_ratio)
-      if (params.image_size !== undefined) form.append('image_size', params.image_size)
       body = form
     } else if (isSeedream(params.model)) {
       // Seedream unifies generation and editing on /images/generations; the
@@ -844,7 +822,6 @@ async function requestOneImage(
         prompt: request.prompt,
         image: [request.image, ...(request.images ?? []).filter(img => typeof img === 'string' && img !== '').slice(0, 4)],
         ...params.size !== undefined ? { size: params.size } : {},
-        ...params.resolution !== undefined ? { resolution: params.resolution } : {},
         response_format: isVolcSeedream(params.model) ? 'url' : 'b64_json',
       })
     } else {
@@ -861,8 +838,6 @@ async function requestOneImage(
       form.append('prompt', request.prompt)
       form.append('model', params.model)
       if (params.size !== undefined) form.append('size', params.size)
-      if (params.quality !== undefined) form.append('quality', params.quality)
-      if (params.detail !== undefined) form.append('detail', params.detail)
       body = form
     }
   } else {
@@ -1232,9 +1207,7 @@ async function generateChatCompletionImages(
   signal?: AbortSignal,
 ): Promise<GeneratedImage[]> {
   const count = effectiveCount(request)
-  const batches = await Promise.all(
-    Array.from({ length: count }, () => requestOneChatImage(upstream, baseUrl, request, signal)),
-  )
+  const batches = await imageBatches(count, () => requestOneChatImage(upstream, baseUrl, request, signal))
   return batches.flat()
 }
 
@@ -1258,17 +1231,21 @@ export async function generateImage(upstream: UpstreamConfig, request: GenerateR
   if (upstream.apiUrlFull !== true) {
     // ModelScope exposes Qwen models through the OpenAI-compatible image API,
     // not DashScope's native multimodal-generation contract.
-    if (!isModelScopeInference(baseUrl) && isQwenImage(wireModel(request))) return generateQwenImage(baseUrl, upstream, request, options)
-    if (isMiniMaxImage(wireModel(request))) return generateMiniMaxImage(baseUrl, upstream, request, options)
+    if (!isModelScopeInference(baseUrl) && isQwenImage(wireModel(request))) {
+      const batches = await imageBatches(clampCount(request.n), () => generateQwenImage(baseUrl, upstream, { ...request, n: 1 }, options))
+      return { images: batches.flatMap(batch => batch.images) }
+    }
+    if (isMiniMaxImage(wireModel(request))) {
+      const batches = await imageBatches(clampCount(request.n), () => generateMiniMaxImage(baseUrl, upstream, { ...request, n: 1 }, options))
+      return { images: batches.flatMap(batch => batch.images) }
+    }
     if (request.mode === 'edit' && isZhipuImage(wireModel(request))) {
       throw new ImageGenError('智谱 GLM-Image 当前仅支持文生图，请切换到文生图模式或选择支持图生图的模型', 'edit-unsupported')
     }
   }
   const params = effectiveParams(request)
   const count = effectiveCount(request)
-  const batches = await Promise.all(
-    Array.from({ length: count }, () => requestOneImage(baseUrl, upstream, request, params, options.signal)),
-  )
+  const batches = await imageBatches(count, () => requestOneImage(baseUrl, upstream, request, params, options.signal))
   return { images: batches.flat() }
 }
 

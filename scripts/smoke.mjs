@@ -238,7 +238,7 @@ const upstream = createServer(async (req, res) => {
     assert.ok(body.prompt === 'a cat' || body.prompt === 'a mismatch cat' || body.prompt === 'a background cat' || body.prompt === 'cancel this' || body.prompt === 'signed urls' || body.prompt === 'foreign url' || body.prompt === 'parallel one' || body.prompt === 'parallel two')
     if (body.model === 'gpt-image-2') {
       assert.equal(body.size, '1024x1024')
-      assert.equal(body.quality, 'high')
+      assert.equal(body.quality, undefined)
     } else {
       assert.equal(body.aspect_ratio, '1:1')
       assert.equal(body.response_format, 'b64_json')
@@ -246,7 +246,7 @@ const upstream = createServer(async (req, res) => {
     // The engine never sends `n`: Responses-API gateways reject the batch
     // parameter, so the requested count is satisfied by parallel requests.
     assert.equal(body.n, undefined)
-    assert.equal(body.detail, body.model === 'grok-imagine-image' || body.prompt === 'signed urls' || body.prompt === 'foreign url' ? undefined : 'standard')
+    assert.equal(body.detail, undefined)
     if (body.prompt === 'parallel one' || body.prompt === 'parallel two') {
       activeGenerationRequests += 1
       maxGenerationRequests = Math.max(maxGenerationRequests, activeGenerationRequests)
@@ -620,7 +620,7 @@ await check('B8 Zhipu GLM-Image uses the official generation contract', async ()
     assert.equal(result.images.length, 1)
     assert.deepEqual(seen[0], {
       path: '/api/paas/v4/images/generations',
-      body: { model: 'glm-image', prompt: 'x', size: '1024x1024', quality: 'hd' },
+      body: { model: 'glm-image', prompt: 'x', size: '1024x1024' },
     })
   } finally {
     await new Promise(resolve => zhipu.close(resolve))
@@ -658,7 +658,7 @@ await check('B9 Qwen-Image speaks the DashScope native contract', async () => {
       { apiUrl: base, apiKey: 'qwen-key' },
       { mode: 'text', model: 'qwen-image-3.0', prompt: 'a cat', size: '16:9', quality: 'auto', n: 2, detail: '' },
     )
-    assert.equal(result.images.length, 1)
+    assert.equal(result.images.length, 2)
     assert.equal(result.images[0].b64, pngBytes.toString('base64'))
     assert.deepEqual(seen[0], {
       auth: 'Bearer qwen-key',
@@ -666,7 +666,7 @@ await check('B9 Qwen-Image speaks the DashScope native contract', async () => {
       body: {
         model: 'qwen-image-3.0',
         input: { messages: [{ role: 'user', content: [{ text: 'a cat' }] }] },
-        parameters: { size: '2688*1536', n: 2 },
+        parameters: { size: '2688*1536' },
       },
     })
     // Classic series: single image per call, fixed size list, no n parameter.
@@ -718,13 +718,13 @@ await check('B9b MiniMax image-01 speaks the native /image_generation contract',
       { apiUrl: base, apiKey: 'mm-key' },
       { mode: 'text', model: 'image-01', prompt: 'a boat', size: '16:9', quality: 'auto', n: 2, detail: '' },
     )
-    assert.equal(result.images.length, 1)
+    assert.equal(result.images.length, 2)
     assert.equal(result.images[0].b64, pngBytes.toString('base64'))
     assert.equal(result.images[0].mime, 'image/png')
     assert.deepEqual(seen[0], {
       auth: 'Bearer mm-key',
       path: '/v1/image_generation',
-      body: { model: 'image-01', prompt: 'a boat', response_format: 'base64', aspect_ratio: '16:9', n: 2 },
+      body: { model: 'image-01', prompt: 'a boat', response_format: 'base64', aspect_ratio: '16:9' },
     })
     // auto size omits aspect_ratio; n=1 omits n; n is capped at 9.
     seen.length = 0
@@ -732,7 +732,8 @@ await check('B9b MiniMax image-01 speaks the native /image_generation contract',
     assert.deepEqual(seen[0].body, { model: 'image-01', prompt: 'x', response_format: 'base64' })
     seen.length = 0
     await host.generateImage({ apiUrl: base, apiKey: 'mm-key' }, { mode: 'text', model: 'image-01', prompt: 'x', size: '1:1', quality: 'auto', n: 50, detail: '' })
-    assert.ok(seen[0].body.n <= 9, `n must be capped at 9, got ${seen[0].body.n}`)
+    assert.equal(seen.length, 50)
+    assert.equal(seen[0].body.n, undefined)
     // Edit mode: one character subject_reference with the data URL.
     seen.length = 0
     const ref = `data:image/png;base64,${pngBytes.toString('base64')}`
@@ -4126,6 +4127,14 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     const view = jsdomDocument.querySelector('[data-dsh-imagegen-view]')
     assert.ok(view !== null, 'studio view container was mounted')
     assert.ok(view.isConnected, 'view container attached to the center column')
+    assert.ok([...view.querySelectorAll('button')].some(button => button.textContent.trim() === '← 返回'), 'visible studio back button')
+    assert.ok(view.textContent.includes('100 张'), '100-image preset is available')
+    assert.ok(view.textContent.includes('4:5'), 'expanded aspect ratios are available')
+    assert.equal(view.textContent.includes('清晰度'), false, 'clarity controls are removed')
+    assert.equal(view.textContent.includes('透传参数'), false, 'detail passthrough controls are removed')
+    const customCount = view.querySelector('input[type="number"][max="100"]')
+    assert.ok(customCount !== null, 'custom generation count input')
+
     assert.ok(jsdomDocument.querySelector('[data-dsh-imagegen-chat-resizer]') !== null, 'chat resizer was mounted')
     assert.ok(jsdomDocument.querySelector('[data-dsh-imagegen-history-host] [data-dsh-imagegen-history]') !== null, 'history moved into the sidebar region')
     assert.equal(view.querySelector('[data-dsh-imagegen-history]'), null, 'studio no longer owns the history column')
@@ -4203,6 +4212,14 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     await new Promise(resolve => setTimeout(resolve, 20))
     assert.equal(jsdomDocument.documentElement.hasAttribute('data-dsh-imagegen-active'), false, 'the studio closes again')
     assert.equal(nativeNewSessionCalls, 0, 'returning to the current conversation never starts a new session')
+    jsdomDocument.querySelector('[data-dsh-imagegen-tab="image"]').click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const backButton = [...view.querySelectorAll('button')].find(button => button.textContent.trim() === '← 返回')
+    backButton.click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(jsdomDocument.documentElement.hasAttribute('data-dsh-imagegen-active'), false, 'studio back button returns to conversation')
+    assert.equal(nativeNewSessionCalls, 0, 'back button preserves the current session')
+
 
     // The native action must both create a session and close the studio, even
     // when the shell exposes no recognizable newSession CSS class.

@@ -1,3 +1,4 @@
+import { normalizeImageCount } from './image-options.ts'
 /** Agent-facing image-generation tools backed by the shared host queue. */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -183,9 +184,7 @@ export async function submitAgentImageEdit(
     channel: picked.channel.name,
     prompt: input.prompt.trim(),
     size: 'auto',
-    quality: 'auto',
     n: 1,
-    detail: '',
     image: imageDataUrl(reference),
     ...reference.ref.name === undefined ? {} : { refName: reference.ref.name },
   })
@@ -327,9 +326,7 @@ export function registerAgentImageTools(ctx: Context, runtime: ImageGenerationRu
         prompt: { type: 'string', required: true, description: 'Detailed image-generation prompt.' },
         model: { type: 'string', description: 'One of the configured image models. Defaults to the configured default image model, or the first model when none is configured.' },
         size: { type: 'string', description: 'Aspect ratio such as 1:1, 16:9, 9:16, or auto.' },
-        quality: { type: 'string', description: 'auto, 1k, 2k, or 4k.' },
-        count: { type: 'integer', description: 'Number of images, 1 to 4. Defaults to 1.' },
-        detail: { type: 'string', description: 'Optional provider detail value, for example standard or high.' },
+        count: { type: 'integer', description: 'Number of images, 1 to 100. Defaults to 1.' },
         wait_for_completion: { type: 'boolean', description: 'Wait for images and return them in this tool result. Defaults to true; set false for background mode.' },
       },
       output: {
@@ -349,9 +346,7 @@ export function registerAgentImageTools(ctx: Context, runtime: ImageGenerationRu
           channel: picked.channel.name,
           prompt: args.prompt.trim(),
           size: args.size ?? 'auto',
-          quality: args.quality ?? 'auto',
-          n: Math.min(4, Math.max(1, args.count ?? 1)),
-          detail: args.detail ?? '',
+          n: normalizeImageCount(args.count ?? 1),
         })
         return taskResult(args.wait_for_completion === false ? task : await waitForTask(task.id, exec.signal))
       },
@@ -364,9 +359,7 @@ export function registerAgentImageTools(ctx: Context, runtime: ImageGenerationRu
         source_image: { ...imageRefSchema, required: true, description: 'Image reference returned by get_image_generation_task.' },
         model: { type: 'string', description: 'One of the configured image models. Defaults to the configured default image model, or the first model when none is configured.' },
         size: { type: 'string', description: 'Aspect ratio such as 1:1, 16:9, 9:16, or auto.' },
-        quality: { type: 'string', description: 'auto, 1k, 2k, or 4k.' },
-        count: { type: 'integer', description: 'Number of images, 1 to 4. Defaults to 1.' },
-        detail: { type: 'string', description: 'Optional provider detail value.' },
+        count: { type: 'integer', description: 'Number of images, 1 to 100. Defaults to 1.' },
         wait_for_completion: { type: 'boolean', description: 'Wait for images and return them in this tool result. Defaults to true; set false for background mode.' },
       },
       output: {
@@ -387,9 +380,7 @@ export function registerAgentImageTools(ctx: Context, runtime: ImageGenerationRu
           channel: picked.channel.name,
           prompt: args.prompt.trim(),
           size: args.size ?? 'auto',
-          quality: args.quality ?? 'auto',
-          n: Math.min(4, Math.max(1, args.count ?? 1)),
-          detail: args.detail ?? '',
+          n: normalizeImageCount(args.count ?? 1),
           image: imageDataUrl(reference),
           ...reference.ref.name === undefined ? {} : { refName: reference.ref.name },
         })

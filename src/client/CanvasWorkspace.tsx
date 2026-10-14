@@ -1,3 +1,4 @@
+import { IMAGE_RATIOS, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
 /** Infinite canvas workspace, rebuilt after the node-graph model of
  * basketikun/infinite-canvas: free nodes (image/text), drag-to-connect edges,
  * marquee + multi selection, context menus, minimap, undo/redo and a floating
@@ -1336,7 +1337,6 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
   }, [modelGroupsKey, defaultChannelId])
 
   const [composerSize, setComposerSize] = useState('auto')
-  const [composerQuality, setComposerQuality] = useState('auto')
   const [composerCount, setComposerCount] = useState(1)
   const [composerBusy, setComposerBusy] = useState(false)
   const channelIsConnected = useCallback((channelId: string): boolean => {
@@ -2578,7 +2578,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
       const composerChoice = resolveModelChoice(modelGroups, { channelId: composerChannelId, model: composerModel }, defaultChannelId)
       const model = composerChoice.model
       if (model === '') { setError(tt('canvas.needModel')); setComposerBusy(false); return }
-      const count = Math.min(4, Math.max(1, Math.round(composerCount)))
+      const count = normalizeImageCount(composerCount)
       const baseAsset = referenceImages[0] !== undefined ? usableAsset(referenceImages[0]!) : undefined
       const finalPrompt = annotationPlan === undefined ? prompt : `${prompt}\n\n${annotationPlan.prompt}`
       let image: string | undefined
@@ -2600,7 +2600,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
       }
       const footprint = nodeSizeFromRatio(composerSize, IMAGE_NODE_SIZE)
       const request: GenerateRequest = {
-        mode: image === undefined ? 'text' : 'edit', model, prompt: finalPrompt, size: composerSize, quality: composerQuality, n: count, detail: '',
+        mode: image === undefined ? 'text' : 'edit', model, prompt: finalPrompt, size: composerSize, n: count,
         ...(composerChoice.channelId === '' ? {} : { channelId: composerChoice.channelId }),
         ...(image === undefined ? {} : { image, refName }),
         ...(images === undefined ? {} : { images }),
@@ -2646,7 +2646,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
     } finally {
       setComposerBusy(false)
     }
-  }, [annotationPlanOf, api, canvasCenter, composerBusy, composerChannelConnected, composerChannelId, composerCount, composerModel, composerPrompt, composerQuality, composerSize, defaultChannelId, modelGroups, mutate, onOpenSettings, upstreamNodes])
+  }, [annotationPlanOf, api, canvasCenter, composerBusy, composerChannelConnected, composerChannelId, composerCount, composerModel, composerPrompt, composerSize, defaultChannelId, modelGroups, mutate, onOpenSettings, upstreamNodes])
 
   // ---------------------------------------------------------- task intake
 
@@ -2695,7 +2695,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
         if (extras.length > 0) images = extras
       }
       const request: GenerateRequest = {
-        mode: image === undefined ? 'text' : 'edit', model, prompt, size: metadata.size ?? 'auto', quality: metadata.quality ?? 'auto', n: 1, detail: '',
+        mode: image === undefined ? 'text' : 'edit', model, prompt, size: metadata.size ?? 'auto', n: 1,
         ...(retryChoice.channelId === '' ? {} : { channelId: retryChoice.channelId }),
         ...(image === undefined ? {} : { image, refName }),
         ...(images === undefined ? {} : { images }),
@@ -3942,32 +3942,16 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
         <ComposerSelect
           ariaLabel={tt('canvas.size')}
           value={composerSize}
-          options={[
-            { value: 'auto', label: tt('canvas.sizeAuto') },
-            { value: '1:1', label: '1:1' },
-            { value: '3:4', label: '3:4' },
-            { value: '16:9', label: '16:9' },
-            { value: '9:16', label: '9:16' },
-          ]}
+          options={IMAGE_RATIOS.map(value => ({ value, label: value === 'auto' ? tt('canvas.sizeAuto') : value }))}
           onChange={setComposerSize}
-        />
-        <ComposerSelect
-          ariaLabel={tt('canvas.quality')}
-          value={composerQuality}
-          options={[
-            { value: 'auto', label: tt('canvas.qualityAuto') },
-            { value: '1k', label: '1K' },
-            { value: '2k', label: '2K' },
-            { value: '4k', label: '4K' },
-          ]}
-          onChange={setComposerQuality}
         />
         <ComposerSelect
           ariaLabel={tt('canvas.count')}
           value={String(composerCount)}
-          options={[1, 2, 3, 4].map(item => ({ value: String(item), label: tt('canvas.countUnit', { count: item }) }))}
+          options={IMAGE_COUNTS.map(item => ({ value: String(item), label: tt('canvas.countUnit', { count: item }) }))}
           onChange={value => setComposerCount(Number(value))}
         />
+        <input type="number" aria-label={tt('params.customCount')} min={1} max={100} step={1} value={composerCount} style={{ width: 64 }} onChange={event => setComposerCount(normalizeImageCount(Number(event.target.value)))} />
         <button
           type="button"
           className={css.composerSend}
@@ -4468,7 +4452,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
           id: newId('node'), type: 'image', title: tt('canvas.imageNode'),
           x: Math.round(center.x - size.width / 2), y: Math.round(center.y - size.height / 2),
           width: size.width, height: size.height,
-          metadata: { status: 'generating', prompt: task.request.prompt, model: task.request.model, ...(task.request.channelId === undefined ? {} : { channelId: task.request.channelId }), size: task.request.size, quality: task.request.quality, taskId: task.id, sourceNodeId: task.request.canvas?.sourceNodeId },
+          metadata: { status: 'generating', prompt: task.request.prompt, model: task.request.model, ...(task.request.channelId === undefined ? {} : { channelId: task.request.channelId }), size: task.request.size, taskId: task.id, sourceNodeId: task.request.canvas?.sourceNodeId },
         }
         placeNewNode(node)
         setPickerOpen(false)
@@ -4739,7 +4723,7 @@ function ImagePicker(props: {
   }, [pickerGroupsKey, defaultChannelId])
 
   const [size, setSize] = useState('auto')
-  const [quality, setQuality] = useState('auto')
+  const [count, setCount] = useState(1)
   const [busy, setBusy] = useState(false)
   const toggle = (key: string): void => setSelected(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key])
   const items = (tab === 'history' ? history : gallery).flatMap(entry => entry.images.map((image, index) => ({ key: `${entry.id}:${index}`, entry, image, index })))
@@ -4769,17 +4753,17 @@ function ImagePicker(props: {
     setBusy(true)
     try {
       const choice = resolveModelChoice(modelGroups, { channelId, model }, defaultChannelId)
-      const task = await api.taskSubmit({ mode: 'text', model: choice.model, prompt: prompt.trim(), size, quality, n: 1, detail: '', ...(choice.channelId === '' ? {} : { channelId: choice.channelId }), canvas: { canvasId } })
+      const task = await api.taskSubmit({ mode: 'text', model: choice.model, prompt: prompt.trim(), size, n: count, ...(choice.channelId === '' ? {} : { channelId: choice.channelId }), canvas: { canvasId } })
       props.onTask(task)
     } finally { setBusy(false) }
   }
   return <div className={css.modalBackdrop} role="dialog" aria-modal="true" data-canvas-no-zoom=""><section className={css.picker}>
-    <header className={css.pickerHeader}><strong>{tt('canvas.addImage')}</strong><button type="button" aria-label={tt('canvas.close')} title={tt('canvas.close')} onClick={onClose}>×</button></header>
+    <header className={css.pickerHeader}><button type="button" onClick={onClose}>← {tt('navigation.back')}</button><strong>{tt('canvas.addImage')}</strong><button type="button" aria-label={tt('canvas.close')} title={tt('canvas.close')} onClick={onClose}>×</button></header>
     <nav className={css.pickerTabs} role="tablist">{(['upload', 'history', 'gallery', 'generate'] as const).map(item => <button key={item} type="button" role="tab" aria-selected={tab === item} data-active={tab === item ? '' : undefined} onClick={() => { setTab(item); setSelected([]) }}>{item === 'upload' ? tt('canvas.tabUpload') : item === 'history' ? tt('canvas.tabHistory') : item === 'gallery' ? tt('canvas.tabGallery') : tt('canvas.tabGenerate')}</button>)}</nav>
     <div className={css.pickerBody}>
       {tab === 'upload' ? <label className={css.uploadBox} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const files = [...(event.dataTransfer.files ?? [])].filter(file => file.type.startsWith('image/')); if (files.length === 0) return; uploadFiles(files) }}><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={busy} onChange={event => { const files = [...(event.target.files ?? [])]; if (files.length > 0) uploadFiles(files) }} /><span className={css.uploadIcon}><ToolbarIcon name="image" /></span><strong>{tt('canvas.dropHint')}</strong><small>{tt('canvas.dropSub')}</small></label> : null}
       {(tab === 'history' || tab === 'gallery') ? <><div className={css.pickerGrid}>{items.map(item => <button key={item.key} type="button" role="option" aria-selected={selected.includes(item.key)} className={css.pickerCard} data-selected={selected.includes(item.key) ? '' : undefined} onClick={() => toggle(item.key)}><img draggable={false} src={item.image.url} alt={item.entry.prompt} onLoad={event => { const image = event.currentTarget; setDimensions(previous => ({ ...previous, [item.key]: { width: image.naturalWidth || 1, height: image.naturalHeight || 1 } })) }} /><span className={css.pickerCardPrompt}>{item.entry.prompt || tt('canvas.untitledWork')}</span><small>{item.entry.model} · {item.index + 1}/{item.entry.images.length}</small></button>)}</div><footer className={css.pickerFooter}><span>{tt('canvas.picked', { count: selected.length })}</span><button type="button" disabled={busy || selected.length === 0} onClick={() => { void addSelected() }}>{tt('canvas.addToCanvas')}</button></footer></> : null}
-      {tab === 'generate' ? <div className={css.generateForm}><textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.composerPlaceholder')} /><ModelPicker groups={modelGroups} value={{ channelId, model }} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={choice => { setChannelId(choice.channelId); setModel(choice.model) }} /><div className={css.inspectorRow}><ComposerSelect value={size} options={[{ value: 'auto', label: tt('canvas.sizeAuto') }, { value: '1:1', label: '1:1' }, { value: '3:4', label: '3:4' }, { value: '16:9', label: '16:9' }, { value: '9:16', label: '9:16' }]} ariaLabel={tt('canvas.size')} onChange={setSize} /><ComposerSelect value={quality} options={[{ value: 'auto', label: tt('canvas.qualityAuto') }, { value: '1k', label: '1K' }, { value: '2k', label: '2K' }, { value: '4k', label: '4K' }]} ariaLabel={tt('canvas.quality')} onChange={setQuality} /></div><button type="button" disabled={!(connectedChannelIds?.has(channelId) ?? connected) || busy || prompt.trim() === ''} onClick={() => { void generate() }}><ToolbarIcon name="sparkle" />{tt('canvas.generateAndAdd')}</button>{!(connectedChannelIds?.has(channelId) ?? connected) ? <small>{tt('canvas.needApi')}</small> : null}</div> : null}
+      {tab === 'generate' ? <div className={css.generateForm}><textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.composerPlaceholder')} /><ModelPicker groups={modelGroups} value={{ channelId, model }} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={choice => { setChannelId(choice.channelId); setModel(choice.model) }} /><div className={css.inspectorRow}><ComposerSelect value={size} options={IMAGE_RATIOS.map(value => ({ value, label: value === 'auto' ? tt('canvas.sizeAuto') : value }))} ariaLabel={tt('canvas.size')} onChange={setSize} /><ComposerSelect value={String(count)} options={IMAGE_COUNTS.map(value => ({ value: String(value), label: tt('canvas.countUnit', { count: value }) }))} ariaLabel={tt('canvas.count')} onChange={value => setCount(Number(value))} /><input type="number" aria-label={tt('params.customCount')} min={1} max={100} step={1} value={count} onChange={event => setCount(normalizeImageCount(Number(event.target.value)))} /></div><button type="button" disabled={!(connectedChannelIds?.has(channelId) ?? connected) || busy || prompt.trim() === ''} onClick={() => { void generate() }}><ToolbarIcon name="sparkle" />{tt('canvas.generateAndAdd')}</button>{!(connectedChannelIds?.has(channelId) ?? connected) ? <small>{tt('canvas.needApi')}</small> : null}</div> : null}
     </div>
   </section></div>
 }

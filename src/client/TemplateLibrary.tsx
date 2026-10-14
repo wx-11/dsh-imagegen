@@ -294,6 +294,7 @@ export function TemplateLibrary(props: {
       <section className={css.shell} onClick={(event) => { event.stopPropagation() }}>
         <header className={css.header}>
           <span className={css.heading}>
+            <Button variant="outline" size="sm" onClick={() => { if (selected !== null) setSelected(null); else onClose() }}>← {tt('navigation.back')}</Button>
             <h3 className={css.title}>{tt('templates.title')}</h3>
             {favoritesView ? (
               <span className={css.meta}>{tt('templates.favoritesCount', { count: favorites.length })}</span>

@@ -139,7 +139,7 @@ export function mountPanel(
   let panelActive = false
 
   const renderPanel = (): void => {
-    root?.render(<ImageGenPanel api={api} scope={scope} active={panelActive} {...services} />)
+    root?.render(<ImageGenPanel api={api} scope={scope} active={panelActive} onBack={() => controller.close()} {...services} />)
   }
 
   const ensure = (): void => {

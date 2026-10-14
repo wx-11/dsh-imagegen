@@ -950,19 +950,8 @@ export interface GenerateRequest extends EcommerceTaskMeta {
    *  and Nano Banana, resolution-tier size for Seedream, the closest pixel size for
    *  OpenAI-compatible endpoints). */
   size: string
-  /** Clarity tier: 'auto' | '1k' | '2k' | '4k'. The host maps it onto the
-   *  model's own vocabulary (resolution for Grok, image_size for Nano Banana,
-   *  and size for Seedream,
-   *  Nano Banana, quality for OpenAI). */
-  quality: string
-  /** Number of images, 1-4. */
+  /** Number of images, 1–100. */
   n: number
-  /**
-   * Passthrough detail parameter: '' (omit), 'standard', or 'high'. Some
-   * gpt-image-2 gateways expose it; official OpenAI endpoints reject unknown
-   * parameters, so the UI defaults to '' (omit).
-   */
-  detail: string
   /** Reference image as a data URL (edit mode only). */
   image?: string
   /** Additional reference images as data URLs (edit mode only). The first
@@ -1134,8 +1123,8 @@ export interface HistoryEntryInput extends EcommerceTaskMeta {
   model: string
   prompt: string
   size: string
-  quality: string
-  detail: string
+  quality?: string
+  detail?: string
   n: number
   images: GeneratedImage[]
   refName?: string

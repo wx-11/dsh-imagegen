@@ -9,6 +9,7 @@
  * counters and filters survive channel deletion.
  */
 
+import { normalizeImageCount, imageBatches } from './image-options.ts'
 import { randomUUID } from 'node:crypto'
 import { generateImage, ImageGenError, type UpstreamConfig } from './engine.ts'
 import { detectImageMime } from './image-format.ts'
@@ -65,8 +66,8 @@ export class ImageGenerationRuntime {
         model: request.model,
         prompt: request.prompt,
         size: request.size,
-        quality: request.quality,
-        detail: request.detail,
+        quality: 'auto',
+        detail: '',
         n: request.n,
         images: result.images,
         ...request.refName === undefined ? {} : { refName: request.refName },
@@ -93,15 +94,14 @@ export class ImageGenerationRuntime {
       throw new ImageGenError('当前部署未挂载 DSH Credentials，订阅账号不可用', 'subscription-unavailable')
     }
     const references = subscriptionReferences(request)
-    const count = Math.max(1, Math.min(4, Math.trunc(request.n) || 1))
-    const batches = await Promise.all(Array.from({ length: count }, async () => await this.subscriptions!.generate({
+    const count = normalizeImageCount(request.n)
+    const batches = await imageBatches(count, async () => await this.subscriptions!.generate({
       vendor: vendorOf(provider),
       prompt: request.prompt,
       size: request.size,
-      quality: request.quality,
       ...(references.length > 0 ? { referenceImages: references } : {}),
       ...(signal === undefined ? {} : { signal }),
-    })))
+    }))
     return batches.flatMap(batch => batch.flatMap(row => {
       const bytes = Buffer.from(row.b64_json, 'base64')
       const mime = detectImageMime(bytes)
