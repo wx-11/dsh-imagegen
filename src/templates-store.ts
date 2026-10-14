@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { imageDataRoot } from './image-storage-path.ts'
+import { imageDataRoot, templateImageCacheRoot } from './image-storage-path.ts'
 import { atomicWrite } from './image-store-io.ts'
 import { assertCompleteImage } from './image-format.ts'
 import { registrySnapshot } from './template-registry.ts'
@@ -471,7 +471,7 @@ export async function readTemplateImage(sourceId: string, file: string, scope: s
   if (!isAllowedImageRef(def, file)) return undefined
   const list = await listTemplates(sourceId)
   if (!list.cases.some(entry => entry.image === file)) return undefined
-  const cacheDir = path.join(imageDataRoot(), 'template-images', scope, sourceId)
+  const cacheDir = path.join(templateImageCacheRoot(), scope, sourceId)
   const cacheFile = cacheFileOf(file)
   try {
     const data = await fs.readFile(path.join(cacheDir, cacheFile))

@@ -300,7 +300,7 @@ function mimeOfPath(filePath: string): string {
 import { ImageGenerationRuntime, type ChannelsView, type RuntimeChannel } from './generation-runtime.ts'
 import { registerAgentImageTools } from './agent-image-tools.ts'
 import { registerEditImageCommand } from './edit-image-command.ts'
-import { setImageDataRoot, imageDataRoot } from './image-storage-path.ts'
+import { setImageDataRoot, imageDataRoot, setTemplateImageCacheRoot } from './image-storage-path.ts'
 import { listHistory } from './history-store.ts'
 import { listGallery } from './gallery-store.ts'
 import { presetById } from './presets.ts'
@@ -378,9 +378,12 @@ export interface Config {
   promptApiKey?: string
   /** Chat model used to expand short image prompts. */
   promptModel?: string
-  /** Local root for generated/history/gallery/canvas images. Empty keeps the default under DSH_HOME. */
+  /** Explicit proxy for template lists and reference-image downloads. */
   templateProxyUrl?: string
+  /** Local root for generated/history/gallery/canvas images. Empty keeps the default under DSH_HOME. */
   localStoragePath?: string
+  /** Template reference-image cache root. Empty follows the local storage directory. */
+  templateCachePath?: string
   /** Sync saved images to an S3-compatible object store (COS / OSS / Qiniu S3 …). */
   storageEnabled?: boolean
   /** S3-compatible endpoint URL including the bucket (virtual-hosted or path style). */
@@ -454,6 +457,7 @@ const configSchema = z.object({
   promptModel: z.string().default('').volatile(),
   templateProxyUrl: z.string().default('').volatile(),
   localStoragePath: z.string().default('').volatile(),
+  templateCachePath: z.string().default('').volatile(),
   storageEnabled: z.boolean().default(false).volatile(),
   storageEndpoint: z.string().default('').volatile(),
   storageRegion: z.string().default('').volatile(),
@@ -629,6 +633,7 @@ export function apply(ctx: Context, config?: Config): (() => void) | void {
   const resolve = (): EffectiveConfig => {
     const value = unwrapConfig(current())
     setImageDataRoot(value.localStoragePath)
+    setTemplateImageCacheRoot(value.templateCachePath)
     setTemplateProxy(value.templateProxyUrl)
     let channels = normalizeChannels(value.channels)
     // Settings scopes are deep-frozen by the host. Legacy migration adds the

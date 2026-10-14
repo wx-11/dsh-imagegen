@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import net from 'node:net'
-import { setImageDataRoot } from '../src/image-storage-path.ts'
+import { imageDataRoot, setImageDataRoot, setTemplateImageCacheRoot, templateImageCacheRoot } from '../src/image-storage-path.ts'
 import { listTemplates, refreshTemplates, readTemplateImage, clearTemplateMemo } from '../src/templates-store.ts'
 import { setTemplateProxy, templateFetch, readLimitedBody } from '../src/template-network.ts'
 import { matchesTemplate } from '../src/template-registry.ts'
@@ -71,6 +71,21 @@ try {
   assert.equal(downloads, 6, 'broken disk cache redownloads')
   await Promise.all(cases.slice(1).map(entry => readTemplateImage('vibeui', entry.image, 'all')))
   assert.equal(peak, 300, 'host-wide concurrency reaches but never exceeds 300')
+  const customCache = path.join(root, 'cache-on-another-disk')
+  setTemplateImageCacheRoot(customCache)
+  assert.equal(templateImageCacheRoot(), customCache)
+  assert.equal(imageDataRoot(), root, 'cache setting does not change generated image storage')
+  await readTemplateImage('vibeui', 'case0.png', 'all')
+  assert.deepEqual(await fs.readFile(path.join(customCache, 'all/vibeui/case0.png')), png)
+  assert.deepEqual(await fs.readFile(path.join(root, 'template-images/all/vibeui/case0.png')), png, 'old files remain intact')
+  const beforeCustomHit = downloads
+  await readTemplateImage('vibeui', 'case0.png', 'all')
+  assert.equal(downloads, beforeCustomHit, 'configured cache is read without another download')
+  setImageDataRoot(path.join(root, 'generated-on-another-disk'))
+  assert.equal(templateImageCacheRoot(), customCache, 'explicit cache remains independent of generated storage')
+  setTemplateImageCacheRoot('')
+  assert.equal(templateImageCacheRoot(), path.join(imageDataRoot(), 'template-images'), 'empty setting follows local image storage')
+  setImageDataRoot(root)
   assert.equal(await readTemplateImage('vibeui', 'case0.png', '../escape'), undefined)
   assert.equal(await readTemplateImage('vibeui', 'unknown.png', 'all'), undefined)
   const priorFetch = globalThis.fetch
@@ -119,10 +134,10 @@ try {
   setTemplateProxy('')
   assert.equal(await (await templateFetch(`http://127.0.0.1:${upstream.address().port}/direct`)).text(), 'via configured proxy')
   assert.equal(tunnels, 1, 'empty setting connects directly')
-  console.log('TEMPLATE CACHE TEST OK: 1742 entries; title/prompt search; 5 isolated scopes; repair; concurrency=300; HTTP retry; bare-host proxy forwarding')
+  console.log('TEMPLATE CACHE TEST OK: 1742 entries; title/prompt search; 5 isolated scopes; custom cache path/reset; repair; concurrency=300; HTTP retry; bare-host proxy forwarding')
 } finally {
   globalThis.fetch = realFetch
-  setTemplateProxy(''); setImageDataRoot(undefined); clearTemplateMemo()
+  setTemplateProxy(''); setTemplateImageCacheRoot(undefined); setImageDataRoot(undefined); clearTemplateMemo()
   sockets.forEach(socket => socket.destroy())
   for (const server of [proxy, upstream]) if (server.listening) await new Promise(resolve => server.close(resolve))
   await fs.rm(root, { recursive: true, force: true })

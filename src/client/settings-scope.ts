@@ -44,6 +44,8 @@ export interface ImageGenConfig {
   promptApiKey?: string
   promptModel?: string
   templateProxyUrl?: string
+  localStoragePath?: string
+  templateCachePath?: string
   /* ----- deprecated legacy single-endpoint fields (migrated to channels) ----- */
   apiUrl?: string
   apiKey?: string

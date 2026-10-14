@@ -1955,7 +1955,7 @@ await check('C6c2 bundled community template snapshots expose stable ids and ima
 await check('C6d data-folder route resolves the host directory (no spawn in tests)', async () => {
   const { body } = await post('/api/dsh-imagegen/data-folder/open', { open: false })
   assert.equal(body.ok, true)
-  assert.ok(String(body.path).includes('.dsh'), 'resolved path points at the DSH data dir')
+  assert.equal(body.path, join(smokeHome, 'dsh-imagegen'), 'reveal follows DSH_HOME rather than hard-coded user directory')
 })
 
 await check('C6e storage test route signs and uploads a probe object', async () => {
@@ -3960,7 +3960,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
         return { ok: true, json: async () => ({ ok: false, code: 'settings-rejected', message: 'timeout must be a number' }) }
       }
       for (const op of payload.ops) {
-        if (['templateProxyUrl', 'skillHeavyTimeoutMinutes', 'promptModel'].includes(op.path[0])) {
+        if (['templateProxyUrl', 'templateCachePath', 'skillHeavyTimeoutMinutes', 'promptModel'].includes(op.path[0])) {
           if (op.op === 'set') configState[op.path[0]] = op.value
           else delete configState[op.path[0]]
         }
@@ -4807,6 +4807,12 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.equal(configState.templateProxyUrl, '127.0.0.1:7890')
     assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().failed, false, 'effective-only host accepts ordinary settings')
     assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().dirty, false)
+    face.edit('templateCachePath', 'D:\\dsh-imagegen-cache')
+    face.save()
+    await waitForSettings()
+    assert.equal(configState.templateCachePath, 'D:\\dsh-imagegen-cache', 'custom cache directory reaches saved settings')
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().templateCachePath.text, 'D:\\dsh-imagegen-cache')
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().failed, false)
     face.edit('skillHeavyTimeoutMinutes', '30')
     face.save()
     await waitForSettings()

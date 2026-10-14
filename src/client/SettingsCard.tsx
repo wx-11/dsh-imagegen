@@ -37,6 +37,7 @@ export interface ImageGenSettings {
   promptModel?: string
   templateProxyUrl?: string
   localStoragePath?: string
+  templateCachePath?: string
   storageEnabled?: boolean
   storageEndpoint?: string
   storageRegion?: string
@@ -67,6 +68,7 @@ export interface ImageGenSettingsCardState extends CardShell {
   promptModel: CardFieldState
   templateProxyUrl: CardFieldState
   localStoragePath: CardFieldState
+  templateCachePath: CardFieldState
   storageEnabled: CardFieldState
   storageEndpoint: CardFieldState
   storageRegion: CardFieldState
@@ -122,6 +124,7 @@ export class ImageGenSettingsCardController {
       textField('promptModel'),
       textField('templateProxyUrl'),
       textField('localStoragePath'),
+      textField('templateCachePath'),
       booleanField('storageEnabled'),
       textField('storageEndpoint'),
       textField('storageRegion'),
@@ -156,6 +159,7 @@ export class ImageGenSettingsCardController {
       promptModel: this.form.field('promptModel'),
       templateProxyUrl: this.form.field('templateProxyUrl'),
       localStoragePath: this.form.field('localStoragePath'),
+      templateCachePath: this.form.field('templateCachePath'),
       storageEnabled: this.form.field('storageEnabled'),
       storageEndpoint: this.form.field('storageEndpoint'),
       storageRegion: this.form.field('storageRegion'),
@@ -780,8 +784,8 @@ export function ImageGenSettingsSection(props: ImageGenSettingsSectionProps) {
 
             <SettingsSection
               id="storage"
-              title={t('settings.storageTitle')}
-              hint={t('settings.storageHint')}
+              title={t('settings.imageStorageTitle')}
+              hint={t('settings.imageStorageHint')}
               summary={storageSummary}
               tone={state.storageEnabled.text === 'true' ? 'ready' : 'neutral'}
               expanded={activeSection === 'storage'}
@@ -806,6 +810,16 @@ export function ImageGenSettingsSection(props: ImageGenSettingsSectionProps) {
               {...state.localStoragePath}
               onEdit={(text) => { props.edit('localStoragePath', text) }}
               onReset={() => { props.resetField('localStoragePath') }}
+            />
+            <ValueField
+              id="dsh-imagegen-settings-template-cache-path"
+              label={t('settings.templateCachePath')}
+              hint={t('settings.templateCachePathHint')}
+              placeholder="D:\\dsh-imagegen-cache"
+              {...fieldProps}
+              {...state.templateCachePath}
+              onEdit={(text) => { props.edit('templateCachePath', text) }}
+              onReset={() => { props.resetField('templateCachePath') }}
             />
             <BooleanField
               id="dsh-imagegen-settings-storage-enabled"

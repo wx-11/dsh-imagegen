@@ -10,8 +10,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { spawn } from 'node:child_process'
 import { mkdir as fsMkdir } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import path from 'node:path'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { ImageAttachmentRef, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { SettingsConflictError, type SettingsDescriptor } from '@deepseek-ai/dsh-settings'
@@ -31,6 +29,7 @@ import { testStorage, type StorageSyncConfig } from './storage-sync.ts'
 import { checkForUpdate, CURRENT_VERSION, installUpdate } from './updater.ts'
 import { IMAGE_PRESETS } from './presets.ts'
 import { clearDiagnostics, listDiagnostics } from './diagnostics-store.ts'
+import { imageDataRoot } from './image-storage-path.ts'
 import { AGENT_IMAGE_API, CANVAS_API, CANVAS_SKILL_API, CONVERSATION_IMAGE_API, DATA_FOLDER_API, DEFAULT_TEMPLATE_SOURCE_ID, DIAGNOSTICS_API, GALLERY_API, GENERATE_API, HISTORY_API, IMAGEGEN_SETTINGS_NAMESPACE, IMAGE_MODEL_API, PRESETS_API, PROMPT_ENHANCE_API, SETTINGS_API, STORAGE_API, SUBSCRIPTION_API, SUBSCRIPTION_PROVIDERS, TASK_API, TEMPLATE_FAVORITES_API, TEMPLATES_API, UPDATE_API, USAGE_API, isChannelProtocolPreference, isTemplateSourceId, type CanvasAssetRef, type CanvasDocument, type CanvasSkillCatalog, type CanvasSkillConfigApplyRequest, type CanvasSkillConfigApplyResult, type CanvasSkillConfigSaveRequest, type CanvasSkillConfigSaveResult, type CanvasSkillInstallRequest, type CanvasSkillInstallResult, type CanvasSkillLibrary, type CanvasSkillRemoveResult, type CanvasSkillRunRequest, type CanvasSkillTask, type GeneratedImage, type GenerateRequest, type HistoryEntry, type HistoryEntryInput, type ModelMapping, type PresetProviderView, type TemplateFavorite, type TemplateListResult, type TemplateRefreshResult, type TemplateSample } from './protocol.ts'
 
 /** Cap on JSON request bodies (settings ops and generate payloads are small). */
@@ -1893,7 +1892,8 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
       handler: async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
-        const dir = path.join(homedir(), '.dsh', 'dsh-imagegen')
+        deps.resolve()
+        const dir = imageDataRoot()
         try {
           await fsMkdir(dir, { recursive: true })
         } catch { /* reveal still works when the directory already exists */ }
