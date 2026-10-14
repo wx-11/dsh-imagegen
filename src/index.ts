@@ -300,6 +300,8 @@ import { ImageGenerationRuntime, type ChannelsView, type RuntimeChannel } from '
 import { registerAgentImageTools } from './agent-image-tools.ts'
 import { registerEditImageCommand } from './edit-image-command.ts'
 import { setImageDataRoot, imageDataRoot } from './image-storage-path.ts'
+import { listHistory } from './history-store.ts'
+import { listGallery } from './gallery-store.ts'
 import { presetById } from './presets.ts'
 import { chatComplete, type PromptModelConfig } from './prompt-enhancer.ts'
 import { SkillRunner, setSkillTranslate, canvasSkillCopy, type SkillAgentBackend, type SkillAgentHandle, type SkillCanvasBackend, type SkillChatBackend, type SkillRegistryBackend } from './skill-runner.ts'
@@ -700,6 +702,12 @@ export function apply(ctx: Context, config?: Config): (() => void) | void {
     const value = resolve()
     return { channels: value.channels, defaultChannelId: value.defaultChannelId }
   }
+
+  // Resolve the configured data directory before startup reconciliation.
+  resolve()
+  void Promise.all([listHistory(), listGallery()]).catch(error => {
+    console.error('[dsh-imagegen] startup image recovery failed:', error)
+  })
 
   // Object-storage sync: the image stores announce every file they write; the
   // handler resolves the live settings and uploads when enabled. Fire and

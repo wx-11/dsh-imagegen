@@ -1,6 +1,15 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type ImgHTMLAttributes } from 'react'
 import { tt } from './helpers.ts'
 import css from './panel.module.css'
+
+/** Missing or invalid durable files should show a readable placeholder. */
+export function StoredThumbnail(props: ImgHTMLAttributes<HTMLImageElement>): JSX.Element {
+  const [failedSource, setFailedSource] = useState<string | undefined>()
+  if (props.src !== undefined && failedSource === props.src) {
+    return <span className={`${props.className ?? ''} ${css.imageUnavailable}`} role="img" aria-label={tt('tasks.imageUnavailable')}>{tt('tasks.imageUnavailable')}</span>
+  }
+  return <img {...props} onError={() => { setFailedSource(props.src) }} />
+}
 
 /** Keep closed task details out of the DOM, including their image sources. */
 export function LazyDetails({ summary, children }: { summary: ReactNode; children: () => ReactNode }): JSX.Element {

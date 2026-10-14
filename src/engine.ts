@@ -10,7 +10,7 @@ import { normalizeImageCount, imageBatches } from './image-options.ts'
  */
 
 import { isChatCompletionsUrl, resolveChannelProtocol, type ChannelProtocolPreference, type GeneratedImage, type GenerateRequest, type GenerateResult } from './protocol.ts'
-import { detectImageMime } from './image-format.ts'
+import { assertCompleteImage } from './image-format.ts'
 import { modelFamily, promptCharLimit } from './model-catalog.ts'
 
 /** The upstream credentials the panel's settings card configures. */
@@ -405,7 +405,7 @@ async function normalizeItem(
   if (typeof item.b64_json === 'string' && item.b64_json.trim() !== '') {
     const b64 = bareBase64(item.b64_json)
     if (b64.trim() !== '') {
-      return { b64, mime: detectImageMime(Buffer.from(b64, 'base64')) ?? 'image/png', revisedPrompt }
+      return { b64, mime: assertCompleteImage(Buffer.from(b64, 'base64')), revisedPrompt }
     }
   }
   if (typeof item.url !== 'string' || item.url === '') {
@@ -415,37 +415,45 @@ async function normalizeItem(
   if (url.startsWith('data:')) {
     const parsed = parseDataUrl(url)
     if (parsed === undefined) throw new ImageGenError('upstream returned a malformed data: url')
-    return { b64: parsed.base64, mime: detectImageMime(Buffer.from(parsed.base64, 'base64')) ?? parsed.mime, revisedPrompt }
+    return { b64: parsed.base64, mime: assertCompleteImage(Buffer.from(parsed.base64, 'base64')), revisedPrompt }
   }
   const budget = requestSignal(signal, IMAGE_FETCH_TIMEOUT_MS)
   try {
-    let response: Response
-    try {
-      // Forward the key only to the API's own origin, and never to a
-      // presigned object-storage URL (which carries its own credentials).
-      const forwardKey = upstream.apiKey !== ''
-        && !isPresignedUrl(url)
-        && isSameOriginAsApi(url, upstream.apiUrl)
-      response = await fetch(url, {
-        ...forwardKey
-          ? { headers: { authorization: `Bearer ${upstream.apiKey}` } }
-          : {},
-        signal: budget.signal,
-      })
-    } catch (error) {
-      throw new ImageGenError(`failed to fetch the generated image url: ${error instanceof Error ? error.message : String(error)}`)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response
+      try {
+        // Forward the key only to the API's own origin, and never to a
+        // presigned object-storage URL (which carries its own credentials).
+        const forwardKey = upstream.apiKey !== ''
+          && !isPresignedUrl(url)
+          && isSameOriginAsApi(url, upstream.apiUrl)
+        response = await fetch(url, {
+          ...forwardKey
+            ? { headers: { authorization: `Bearer ${upstream.apiKey}` } }
+            : {},
+          signal: budget.signal,
+        })
+      } catch (error) {
+        throw new ImageGenError(`failed to fetch the generated image url: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      if (!response.ok) {
+        throw new ImageGenError(`failed to fetch the generated image url: HTTP ${response.status}`)
+      }
+      // Budget stays armed through the body read so a stalled download cannot hang the task.
+      try {
+        const buffer = Buffer.from(await response.arrayBuffer())
+        const length = response.headers.get('content-length')
+        const encoding = response.headers.get('content-encoding')
+        // fetch decodes compressed bodies, so their wire length is not comparable.
+        if ((encoding === null || encoding === 'identity') && length !== null && /^\d+$/.test(length)
+          && Number(length) !== buffer.length) throw new Error('图片下载长度与 Content-Length 不一致')
+        const mime = assertCompleteImage(buffer)
+        return { b64: buffer.toString('base64'), mime, revisedPrompt }
+      } catch (error) {
+        if (attempt === 1 || budget.signal.aborted) throw new ImageGenError(`图片下载不完整：${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-    if (!response.ok) {
-      throw new ImageGenError(`failed to fetch the generated image url: HTTP ${response.status}`)
-    }
-    // Budget stays armed through the body read so a stalled download cannot hang the task.
-    const buffer = Buffer.from(await response.arrayBuffer())
-    const contentType = response.headers.get('content-type')
-    const mime = detectImageMime(buffer)
-      ?? (contentType !== null && contentType !== ''
-      ? contentType.split(';')[0]!.trim()
-      : mimeOfExtension(url) ?? 'image/png')
-    return { b64: buffer.toString('base64'), mime, revisedPrompt }
+    throw new ImageGenError('图片下载失败')
   } finally {
     budget.dispose()
   }
@@ -1153,7 +1161,7 @@ async function generateMiniMaxImage(
     }
     const images: GeneratedImage[] = b64s.map(raw => {
       const b64 = bareBase64(raw)
-      return { b64, mime: detectImageMime(Buffer.from(b64, 'base64')) ?? 'image/jpeg' }
+      return { b64, mime: assertCompleteImage(Buffer.from(b64, 'base64')) }
     })
     for (const url of urls) {
       const normalized = await normalizeItem({ url }, upstream, options.signal)

@@ -9,13 +9,14 @@
  */
 
 import { promises as fs } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { atomicWrite, commitImageEntry, readStoredIndex, recoverImageEntries, type ImageWrite } from './image-store-io.ts'
+import { assertCompleteImage } from './image-format.ts'
 import type { GenerateMode, HistoryEntry, HistoryEntryInput } from './protocol.ts'
 import { notifyImageSaved } from './storage-sync.ts'
 import { imageDataRoot } from './image-storage-path.ts'
 
-function historyDir(): string { return imageDataRoot() }
 function galleryDir(): string { return path.join(imageDataRoot(), 'gallery') }
 function indexPath(): string { return path.join(galleryDir(), 'index.json') }
 function imagesDir(): string { return path.join(galleryDir(), 'images') }
@@ -59,6 +60,8 @@ interface StoredEntry {
   detail: string
   n: number
   images: StoredImage[]
+  status?: HistoryEntry['status']
+  error?: string
   hash?: string
   refName?: string
   tags?: string[]
@@ -72,11 +75,6 @@ interface StoredEntry {
   canvas?: HistoryEntryInput['canvas']
 }
 
-/** The index.json shape. */
-interface IndexFile {
-  entries: StoredEntry[]
-}
-
 /** File extension for a MIME type (image file names). */
 function extensionOf(mime: string): string {
   switch (mime.split(';')[0]!.trim()) {
@@ -87,21 +85,9 @@ function extensionOf(mime: string): string {
   }
 }
 
-/** MIME type for a stored image file name (image route responses). */
-function mimeOfFile(file: string): string {
-  const ext = path.extname(file).toLowerCase()
-  switch (ext) {
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg'
-    case '.webp': return 'image/webp'
-    case '.gif': return 'image/gif'
-    default: return 'image/png'
-  }
-}
-
 /** Sanitize an entry id for use as a file-name prefix. */
 function safeId(id: string): string {
-  const cleaned = id.replace(/[^a-zA-Z0-9-]/g, '-')
+  const cleaned = id.replace(/[^a-zA-Z0-9-]/g, '-').replace(/^-+/, '')
   return cleaned === '' ? 'entry' : cleaned
 }
 
@@ -117,27 +103,20 @@ async function ensureDirs(): Promise<void> {
   await fs.mkdir(imagesDir(), { recursive: true })
 }
 
-/** Read the index, tolerating a missing/corrupt file. */
+/** Recover interrupted saves before exposing persisted records. */
 async function readIndex(): Promise<StoredEntry[]> {
-  try {
-    const raw = await fs.readFile(indexPath(), 'utf8')
-    const parsed: unknown = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object') return []
-    const entries = (parsed as { entries?: unknown }).entries
-    if (!Array.isArray(entries)) return []
-    return entries.filter(isStoredEntry)
-  } catch {
-    return []
-  }
+  const entries = await readStoredIndex(galleryDir(), isStoredEntry)
+  return recoverImageEntries(galleryDir(), entries, isStoredEntry, (id, createdAt, images) => ({
+    id, createdAt, mode: 'text', model: 'unknown', prompt: '', size: 'auto',
+    quality: 'auto', detail: '', n: images.length, images,
+    status: 'completed', error: '已恢复遗留图片，原始提示词和生成参数未知',
+  }))
 }
 
-/** Persist the index. */
+/** Persist the index without exposing a partial JSON document. */
 async function writeIndex(entries: StoredEntry[]): Promise<void> {
   await ensureDirs()
-  const payload: IndexFile = { entries }
-  const tmp = `${indexPath()}.tmp-${process.pid}`
-  await fs.writeFile(tmp, JSON.stringify(payload), 'utf8')
-  await fs.rename(tmp, indexPath())
+  await atomicWrite(indexPath(), JSON.stringify({ entries }))
 }
 
 /** Structural guard for a stored entry. */
@@ -180,6 +159,8 @@ function toWire(entry: StoredEntry): HistoryEntry {
     quality: entry.quality,
     detail: entry.detail,
     n: entry.n,
+    ...entry.status === undefined ? {} : { status: entry.status },
+    ...entry.error === undefined ? {} : { error: entry.error },
     images: entry.images.map(image => ({
       url: `/api/dsh-imagegen/gallery/image/${image.file}`,
       mime: image.mime,
@@ -200,8 +181,7 @@ function toWire(entry: StoredEntry): HistoryEntry {
 
 /** List the persisted gallery, newest first, as wire entries. */
 export async function listGallery(): Promise<HistoryEntry[]> {
-  const entries = await readIndex()
-  return entries.map(toWire)
+  return mutateGallery(async () => (await readIndex()).map(toWire))
 }
 
 /** Append one image to the gallery. Deduplicates by first-image content —
@@ -210,30 +190,24 @@ export async function listGallery(): Promise<HistoryEntry[]> {
 export async function appendGallery(input: HistoryEntryInput): Promise<GalleryAppendResult> {
   return mutateGallery(async () => {
     await ensureDirs()
+    const previous = await readIndex()
     const hash = fingerprint(input)
     if (hash !== undefined) {
-      const existing = await readIndex()
+      const existing = previous
       if (existing.some(entry => entry.hash === hash)) {
         return { entries: existing.map(toWire), added: false }
       }
     }
-    const prefix = safeId(input.id)
+    const prefix = `${safeId(input.id)}-${randomUUID()}`
     const storedImages: StoredImage[] = []
-    try {
-      for (let index = 0; index < input.images.length; index++) {
-        const image = input.images[index]!
-        const file = `${prefix}-${index}.${extensionOf(image.mime)}`
-        await fs.writeFile(path.join(imagesDir(), file), Buffer.from(image.b64, 'base64'))
-        notifyImageSaved('gallery', path.join(imagesDir(), file))
-        storedImages.push({
-          file,
-          mime: image.mime,
-          ...image.revisedPrompt === undefined ? {} : { revisedPrompt: image.revisedPrompt },
-        })
-      }
-    } catch (error) {
-      await removeEntryFiles({ images: storedImages } as StoredEntry)
-      throw error
+    const writes: ImageWrite[] = []
+    for (let index = 0; index < input.images.length; index++) {
+      const image = input.images[index]!
+      const file = `${prefix}-${index}.${extensionOf(image.mime)}`
+      writes.push({ file, b64: image.b64 })
+      storedImages.push({ file, mime: image.mime,
+        ...image.revisedPrompt === undefined ? {} : { revisedPrompt: image.revisedPrompt },
+      })
     }
     const entry: StoredEntry = {
       id: input.id,
@@ -257,8 +231,10 @@ export async function appendGallery(input: HistoryEntryInput): Promise<GalleryAp
       ...input.slotLabel === undefined ? {} : { slotLabel: input.slotLabel },
       ...input.canvas === undefined ? {} : { canvas: input.canvas },
     }
-    const merged = [entry, ...await readIndex()]
-    await writeIndex(merged)
+    const merged = [entry, ...previous.filter(old => old.id !== entry.id)]
+    await commitImageEntry(galleryDir(), entry, writes, merged, previous.find(old => old.id === entry.id))
+    for (const image of storedImages) notifyImageSaved('gallery', path.join(imagesDir(), image.file))
+    for (const replaced of previous.filter(old => old.id === entry.id)) await removeEntryFiles(replaced)
     return { entries: merged.map(toWire), added: true }
   })
 }
@@ -268,9 +244,9 @@ export async function removeGallery(id: string): Promise<HistoryEntry[]> {
   return mutateGallery(async () => {
     const previous = await readIndex()
     const target = previous.find(entry => entry.id === id)
-    if (target !== undefined) await removeEntryFiles(target)
     const kept = previous.filter(entry => entry.id !== id)
     await writeIndex(kept)
+    if (target !== undefined) await removeEntryFiles(target)
     return kept.map(toWire)
   })
 }
@@ -291,8 +267,8 @@ export async function updateGalleryTags(id: string, tags: string[]): Promise<His
 export async function clearGallery(): Promise<HistoryEntry[]> {
   return mutateGallery(async () => {
     const previous = await readIndex()
-    for (const entry of previous) await removeEntryFiles(entry)
     await writeIndex([])
+    for (const entry of previous) await removeEntryFiles(entry)
     return []
   })
 }
@@ -304,7 +280,7 @@ export async function readGalleryImage(file: string): Promise<{ data: Buffer; mi
   if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*-[0-9]+\.(png|jpg|jpeg|webp|gif)$/.test(file)) return undefined
   try {
     const data = await fs.readFile(path.join(imagesDir(), file))
-    return { data, mime: mimeOfFile(file) }
+    return { data, mime: assertCompleteImage(data) }
   } catch {
     return undefined
   }

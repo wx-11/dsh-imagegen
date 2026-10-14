@@ -35,7 +35,7 @@ import {
   type ChatImageEventDetail, type ConversationDraftAttachment, type ConversationService,
 } from './conversation-sync.ts'
 import { Select } from './Select.tsx'
-import { LazyDetails, ProgressiveItems } from './ProgressiveContent.tsx'
+import { LazyDetails, ProgressiveItems, StoredThumbnail } from './ProgressiveContent.tsx'
 import { IMAGE_RATIOS, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
 import css from './panel.module.css'
 
@@ -977,6 +977,9 @@ export function ImageGenPanel(props: {
             setImages(completed.result.images)
             setError(completed.result.historyError ?? null)
           }
+          const storageErrors = fetched.flatMap(task => task?.result?.historyError === undefined
+            ? [] : [`${task.request.model}: ${task.result.historyError}`])
+          if (storageErrors.length > 0) setError(storageErrors.join('\n'))
           // Refresh even without a newly hydrated task: chat, canvas and direct
           // generation routes also append records to this shared history.
           if (active && (completed !== undefined || Date.now() - lastHistoryRefresh >= 4500)) {
@@ -2076,7 +2079,7 @@ export function ImageGenPanel(props: {
                   onClick={() => { void viewHistoryGroup(group) }}
                 >
                   {entry.images.length > 0 ? (
-                    <img className={css.historyThumb} src={entry.images[0]!.url} alt="" loading="lazy" decoding="async" />
+                    <StoredThumbnail className={css.historyThumb} src={entry.images[0]!.url} alt="" loading="lazy" decoding="async" />
                   ) : (
                     <span className={css.historyThumbPlaceholder} />
                   )}
@@ -2109,8 +2112,8 @@ export function ImageGenPanel(props: {
                       </dl>
                       <p className={css.taskInputPrompt}>{item.prompt}</p>
                       {item.error ? <p className={css.taskError}>{item.error}</p> : null}
-                      {(item.references?.length ?? 0) > 0 ? <><strong>{tt('tasks.references')}</strong><div className={css.taskImages}>{item.references!.map((image, index) => <a key={index} href={image.url} target="_blank" rel="noreferrer"><img src={image.url} alt={`${tt('tasks.references')} ${index + 1}`} loading="lazy" /></a>)}</div></> : null}
-                      {item.images.length > 0 ? <><strong>{tt('tasks.results')}</strong><div className={css.taskImages}><ProgressiveItems items={item.images}>{(image, index) => <button key={index} type="button" title={`${tt('tasks.results')} ${index + 1}`} onClick={() => { void openHistoryPreview(item.images, index) }}><img src={image.url} alt={`${tt('tasks.results')} ${index + 1}`} loading="lazy" decoding="async" /></button>}</ProgressiveItems></div></> : null}
+                      {(item.references?.length ?? 0) > 0 ? <><strong>{tt('tasks.references')}</strong><div className={css.taskImages}>{item.references!.map((image, index) => <a key={index} href={image.url} target="_blank" rel="noreferrer"><StoredThumbnail src={image.url} alt={`${tt('tasks.references')} ${index + 1}`} loading="lazy" /></a>)}</div></> : null}
+                      {item.images.length > 0 ? <><strong>{tt('tasks.results')}</strong><div className={css.taskImages}><ProgressiveItems items={item.images}>{(image, index) => <button key={index} type="button" title={`${tt('tasks.results')} ${index + 1}`} onClick={() => { void openHistoryPreview(item.images, index) }}><StoredThumbnail src={image.url} alt={`${tt('tasks.results')} ${index + 1}`} loading="lazy" decoding="async" /></button>}</ProgressiveItems></div></> : null}
                       <div className={css.taskDetailActions}>
                         <button type="button" onClick={() => { void restoreTaskInputs(item) }}>{tt('tasks.restore')}</button>
                         <button type="button" onClick={() => { void copyPreviewPrompt(item.prompt) }}>{tt(promptCopied ? 'preview.copied' : 'preview.copyPrompt')}</button>
@@ -2870,7 +2873,7 @@ export function ImageGenPanel(props: {
                           <input type="checkbox" checked={selectedGalleryIds.has(entry.id)} onChange={() => { setGallerySelecting(true); toggleGallerySelection(entry.id) }} />
                         </label>
                         <button type="button" className={css.galleryImageButton} data-selecting={gallerySelecting ? '' : undefined} onClick={() => { if (gallerySelecting) toggleGallerySelection(entry.id); else void viewGalleryEntry(entry) }} title={gallerySelecting ? tt('gallery.select') : tt('preview.open')}>
-                          <img className={css.galleryImage} src={image.url} alt={entry.prompt} loading="lazy" decoding="async" />
+                          <StoredThumbnail className={css.galleryImage} src={image.url} alt={entry.prompt} loading="lazy" decoding="async" />
                           <span className={css.galleryBadge}>{entry.mode === 'edit' ? tt('mode.edit') : tt('mode.text')}</span>
                         </button>
                         <div className={css.galleryCardActions}>

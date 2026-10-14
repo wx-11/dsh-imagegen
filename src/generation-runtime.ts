@@ -12,7 +12,7 @@
 import { normalizeImageCount, imageBatches } from './image-options.ts'
 import { randomUUID } from 'node:crypto'
 import { generateImage, ImageGenError, type UpstreamConfig } from './engine.ts'
-import { detectImageMime } from './image-format.ts'
+import { assertCompleteImage } from './image-format.ts'
 import { vendorOf, type SubscriptionManager, type SubscriptionReferenceImage } from './subscription/manager.ts'
 import { appendHistory } from './history-store.ts'
 import { GenerationTaskQueue } from './task-queue.ts'
@@ -66,14 +66,18 @@ export class ImageGenerationRuntime {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
       try { await this.saveTask(request, recordTask, [], signal?.aborted === true ? 'cancelled' : 'failed', message) }
-      catch (storageError) { throw new ImageGenError(`${message}; 任务记录保存失败：${storageError instanceof Error ? storageError.message : String(storageError)}`) }
+      catch (storageError) {
+        console.error('[dsh-imagegen] failed to persist task:', recordTask.id, storageError)
+        throw new ImageGenError(`${message}; 任务记录保存失败：${storageError instanceof Error ? storageError.message : String(storageError)}`)
+      }
       throw caught
     }
     try {
       const history = await this.saveTask(request, recordTask, result.images, signal?.aborted === true ? 'cancelled' : 'completed')
       return { ...result, history }
     } catch (error) {
-      return { ...result, historyError: error instanceof Error ? error.message : String(error) }
+      console.error('[dsh-imagegen] generated images but failed to persist history:', recordTask.id, error)
+      return { ...result, historyError: `图片已生成，但未能写入历史：${error instanceof Error ? error.message : String(error)}` }
     }
   }
 
@@ -129,8 +133,7 @@ export class ImageGenerationRuntime {
     }))
     return batches.flatMap(batch => batch.flatMap(row => {
       const bytes = Buffer.from(row.b64_json, 'base64')
-      const mime = detectImageMime(bytes)
-      if (mime === undefined) throw new ImageGenError('订阅图像返回了无法识别的图片格式', 'subscription-invalid-image')
+      const mime = assertCompleteImage(bytes)
       return [{ b64: row.b64_json, mime, ...row.revisedPrompt === undefined ? {} : { revisedPrompt: row.revisedPrompt } }]
     }))
   }
