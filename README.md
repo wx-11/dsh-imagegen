@@ -1,13 +1,13 @@
 # dsh-imagegen
 
 <div align="center">
-  <a href="https://www.npmjs.com/package/@dickpy/dsh-imagegen"><img src="https://img.shields.io/npm/v/@dickpy/dsh-imagegen?color=cb3837&logo=npm&label=npm" alt="npm" /></a>
+  <a href="https://www.npmjs.com/package/@wx-11/dsh-imagegen"><img src="https://img.shields.io/npm/v/@wx-11/dsh-imagegen?color=cb3837&logo=npm&label=npm" alt="npm" /></a>
   &nbsp;
-  <a href="https://www.npmjs.com/package/@dickpy/dsh-imagegen"><img src="https://badgen.net/npm/dt/@dickpy/dsh-imagegen?label=downloads&color=blue" alt="npm total downloads" /></a>
+  <a href="https://www.npmjs.com/package/@wx-11/dsh-imagegen"><img src="https://badgen.net/npm/dt/@wx-11/dsh-imagegen?label=downloads&color=blue" alt="npm total downloads" /></a>
   &nbsp;
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6.svg" alt="License" /></a>
   &nbsp;
-  <a href="https://github.com/dickpy/dsh-imagegen"><img src="https://img.shields.io/badge/platform-DeepSeek%20Harness-111827" alt="Platform" /></a>
+  <a href="https://github.com/wx-11/dsh-imagegen"><img src="https://img.shields.io/badge/platform-DeepSeek%20Harness-111827" alt="Platform" /></a>
 
   <p><strong>在 DeepSeek Harness 里，生成、编辑、管理，一站完成。</strong></p>
   <p><strong>快速导航</strong></p>
@@ -20,7 +20,7 @@
 需要已安装 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 和 Node.js 20+。
 
 ```bash
-dsh plugin --profile web add @dickpy/dsh-imagegen
+dsh plugin --profile web add @wx-11/dsh-imagegen
 ```
 
 安装后重启 `dsh web`，侧边栏会出现「生图」入口。到「设置 → 生图配置」添加提供方、填写 API 地址与密钥、检测并选择生图模型，保存后即可开始创作。Windows 若遇 PowerShell 脚本策略限制，请使用 `dsh.cmd`。
@@ -29,7 +29,7 @@ dsh plugin --profile web add @dickpy/dsh-imagegen
 <summary><b>其他安装方式、升级与回滚</b></summary>
 
 - **让 Agent 安装：**把上面的安装命令发给 DSH、Codex 或其他 coding agent。
-- **指定版本：**使用 `@dickpy/dsh-imagegen@<版本号>`，或从 [GitHub Releases](https://github.com/dickpy/dsh-imagegen/releases) 下载 tgz 后安装。
+- **指定版本：**使用 `@wx-11/dsh-imagegen@<版本号>`，或从 [GitHub Releases](https://github.com/wx-11/dsh-imagegen/releases) 下载 tgz 后安装。
 - **升级：**重复执行 `add` 命令；插件也会在面板中提示新版本。更新后重启 `dsh web`。
 - 渠道配置、历史记录和画廊数据保存在 DSH 宿主侧，正常升级不会清空。
 
@@ -138,8 +138,8 @@ dsh plugin --profile web add @dickpy/dsh-imagegen
   <img src="docs/images/community-qq.png" alt="扫码加入 dsh-imagegen QQ 交流群" width="360" />
 </p>
 
-- [Bug 报告](https://github.com/dickpy/dsh-imagegen/issues/new?template=bug_report.yml) · [功能建议](https://github.com/dickpy/dsh-imagegen/issues/new?template=feature_request.yml)
-- [查看所有 Issues](https://github.com/dickpy/dsh-imagegen/issues) · [GitHub Releases](https://github.com/dickpy/dsh-imagegen/releases)
+- [Bug 报告](https://github.com/wx-11/dsh-imagegen/issues/new?template=bug_report.yml) · [功能建议](https://github.com/wx-11/dsh-imagegen/issues/new?template=feature_request.yml)
+- [查看所有 Issues](https://github.com/wx-11/dsh-imagegen/issues) · [GitHub Releases](https://github.com/wx-11/dsh-imagegen/releases)
 - 如果这个插件对你有帮助，欢迎给项目点个 Star。
 
 <details>

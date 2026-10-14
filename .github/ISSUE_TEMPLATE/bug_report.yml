@@ -14,7 +14,7 @@ body:
     id: plugin_version
     attributes:
       label: 插件版本
-      description: 例如 `1.0.0`（可在 `package.json` 或 `npm view @dickpy/dsh-imagegen version` 查看）
+      description: 例如 `1.0.0`（可在 `package.json` 或 `npm view @wx-11/dsh-imagegen version` 查看）
       placeholder: "1.0.0"
     validations:
       required: true
