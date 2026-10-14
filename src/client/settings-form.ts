@@ -70,7 +70,7 @@ export interface CardActions {
   /** Stage a clear, so saving lets the field re-inherit the composition layer. */
   resetField: (field: string) => void
   /** Write every staged edit, then re-seed from what the Host accepted. */
-  save: () => void
+  save: () => Promise<void>
   /** Drop every staged edit. */
   discard: () => void
 }
@@ -99,6 +99,20 @@ export function textField(field: string): FieldSpec {
     parse: (text) => {
       const trimmed = text.trim()
       return trimmed === '' ? { kind: 'clear' } : { kind: 'set', value: trimmed }
+    },
+  }
+}
+
+/** A non-negative numeric setting; empty text restores its inherited value. */
+export function numberField(field: string): FieldSpec {
+  return {
+    field,
+    format: value => typeof value === 'number' ? String(value) : '',
+    parse: text => {
+      const trimmed = text.trim()
+      if (!trimmed) return { kind: 'clear' }
+      const value = Number(trimmed)
+      return Number.isFinite(value) && value >= 0 ? { kind: 'set', value } : undefined
     },
   }
 }
@@ -227,7 +241,7 @@ export class CardForm<T> {
       resetField: (field) => {
         this.stage(field, { text: this.specOf(field).format(this.baseValue(field)), clear: true })
       },
-      save: () => { void this.save() },
+      save: () => this.save(),
       discard: () => {
         if (this.staged.size === 0 && !this.failed) return
         this.staged.clear()
@@ -248,14 +262,23 @@ export class CardForm<T> {
     this.saving = true
     this.failed = false
     this.publish()
-    let landed = true
-    for (const write of writes) {
-      landed = await write() && landed
+    const drafts = new Map(this.staged)
+    let landed = false
+    try {
+      landed = true
+      for (const write of writes) landed = await write() && landed
+      if (landed) {
+        for (const [field, edit] of drafts) {
+          if (this.staged.get(field) === edit) this.staged.delete(field)
+        }
+      }
+    } catch {
+      landed = false
+    } finally {
+      this.saving = false
+      this.failed = !landed
+      this.publish()
     }
-    if (landed) this.staged.clear()
-    this.saving = false
-    this.failed = !landed
-    this.publish()
   }
 
   /**
@@ -288,6 +311,7 @@ export class CardForm<T> {
     await this.scope.unset(field)
     const spec = this.specOf(field)
     if (spec.secret === true) return !(this.options.secretSettled?.(field) ?? false)
+    if (this.userLayer() === undefined) return true
     return !this.stored(field)
   }
 
@@ -295,7 +319,8 @@ export class CardForm<T> {
     await this.scope.set(field, value)
     const spec = this.specOf(field)
     if (spec.secret === true) return this.options.secretSettled?.(field) ?? true
-    return this.userLayer()?.[field] === value
+    const accepted = this.userLayer() === undefined ? this.sectionValue(field) : this.userLayer()?.[field]
+    return JSON.stringify(accepted) === JSON.stringify(value)
   }
 
   private stage(field: string, edit: StagedEdit): void {
@@ -328,7 +353,9 @@ export class CardForm<T> {
 
   private stored(field: string): boolean {
     const user = this.userLayer()
-    return user !== undefined && Object.hasOwn(user, field)
+    if (user !== undefined) return Object.hasOwn(user, field)
+    const value = this.sectionValue(field)
+    return value !== undefined && JSON.stringify(value) !== JSON.stringify(this.baseValue(field))
   }
 
   private publish(): void {

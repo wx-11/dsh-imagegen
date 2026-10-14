@@ -1717,6 +1717,14 @@ await check('C6 template routes are source-scoped, refresh per source, and proxy
   assert.equal(image.status, 200)
   assert.equal(image.headers.get('content-type'), 'image/png')
   assert.deepEqual(Buffer.from(await image.arrayBuffer()), templateImage)
+  const cached = await post('/api/dsh-imagegen/templates/cache', { source: 'vibeui', file: 'case1.png', scope: 'all' })
+  assert.equal(cached.status, 200)
+  assert.equal(cached.body.ok, true)
+  assert.equal(cached.body.bytes, templateImage.length)
+  assert.equal(cached.body.data, undefined, 'batch acknowledgement does not retransmit image bytes')
+  const cacheMissing = await post('/api/dsh-imagegen/templates/cache', { source: 'vibeui', file: 'not-allowed.png', scope: 'all' })
+  assert.equal(cacheMissing.status, 502)
+  assert.equal(cacheMissing.body.ok, false)
   const unknown = await fetch(`http://127.0.0.1:${port}/api/dsh-imagegen/templates/image/vibeui/not-allowed.png`)
   assert.equal(unknown.status, 404)
   // Legacy single-segment image paths are gone: the source id is required.
@@ -3793,7 +3801,14 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
           json: async () => ({ ok: false, code: 'revision-conflict', message: 'settings changed; reload and retry' }),
         }
       }
+      if (payload.ops.some(op => op.path[0] === 'skillHeavyTimeoutMinutes' && op.op === 'set' && typeof op.value !== 'number')) {
+        return { ok: true, json: async () => ({ ok: false, code: 'settings-rejected', message: 'timeout must be a number' }) }
+      }
       for (const op of payload.ops) {
+        if (['templateProxyUrl', 'skillHeavyTimeoutMinutes', 'promptModel'].includes(op.path[0])) {
+          if (op.op === 'set') configState[op.path[0]] = op.value
+          else delete configState[op.path[0]]
+        }
         if (op.path[0] === 'channels' && op.op === 'set') configState.channels = op.value
         if (op.path[0] === 'defaultChannelId' && op.op === 'set') configState.defaultChannelId = op.value
         if (op.path[0] === 'defaultModel') {
@@ -3923,12 +3938,13 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
         blob: async () => new jsdomWindow.Blob([pngBytes], { type: 'image/png' }),
       }
     }
-    if (path.startsWith('/api/dsh-imagegen/templates/image/')) {
-      const scope = new URL(path, 'http://localhost').searchParams.get('scope')
+    if (path.endsWith('/api/dsh-imagegen/templates/cache')) {
+      const scope = JSON.parse(init.body).scope
       const attempt = (templateImageReads.get(scope) ?? 0) + 1
       templateImageReads.set(scope, attempt)
       await new Promise(resolve => setTimeout(resolve, 80))
-      return { ok: scope !== 'source-vibeui' || attempt > 1, status: 404, arrayBuffer: async () => pngBytes }
+      const ok = scope !== 'source-vibeui' || attempt > 1
+      return { ok, status: ok ? 200 : 502, json: async () => ({ ok, bytes: pngBytes.length }) }
     }
     if (path.endsWith('/templates/list')) {
       return {
@@ -4589,6 +4605,35 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.equal(afterRetry.channels.failed, false, 'a successful retry clears the failure state')
     assert.equal(afterRetry.dirty, false, 'a successful retry clears staged edits')
     assert.ok(mutateCalls.at(-1).ops.some(op => op.path[0] === 'channelSecrets' && op.value === 'sk-retry'), 'retry resends the preserved token')
+
+    // Managed hosts may return only the effective value, without a user layer.
+    const waitForSettings = async () => {
+      for (let index = 0; index < 100 && face.hooks.imageGenSettingsCard.getSnapshot().saving; index++) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().saving, false)
+    }
+    face.edit('templateProxyUrl', '127.0.0.1:7890')
+    face.save()
+    await waitForSettings()
+    assert.equal(configState.templateProxyUrl, '127.0.0.1:7890')
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().failed, false, 'effective-only host accepts ordinary settings')
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().dirty, false)
+    face.edit('skillHeavyTimeoutMinutes', '30')
+    face.save()
+    await waitForSettings()
+    assert.equal(configState.skillHeavyTimeoutMinutes, 30, 'numeric settings submit numbers')
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().skillHeavyTimeoutMinutes.text, '30')
+    face.edit('promptModel', 'retry-model')
+    rejectNextSettingsMutation = true
+    face.save()
+    await waitForSettings()
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().failed, true)
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().dirty, true)
+    face.save()
+    await waitForSettings()
+    assert.equal(face.hooks.imageGenSettingsCard.getSnapshot().failed, false)
+    assert.equal(configState.promptModel, 'retry-model')
 
     // Ecommerce submission flow: with the channel key set, confirming the plan
     // fans out one queued task per planned image carrying the set metadata.

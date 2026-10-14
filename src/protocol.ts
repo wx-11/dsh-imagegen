@@ -210,7 +210,11 @@ export const TEMPLATES_API = {
   refresh: '/api/dsh-imagegen/templates/refresh',
   sample: '/api/dsh-imagegen/templates/sample',
   image: '/api/dsh-imagegen/templates/image',
+  cache: '/api/dsh-imagegen/templates/cache',
 } as const
+
+/** Shared download budget for batches and host-side lazy image requests. */
+export const TEMPLATE_DOWNLOAD_CONCURRENCY = 300
 
 /** Same-origin route family for the user's saved (favorited) templates. */
 export const TEMPLATE_FAVORITES_API = {

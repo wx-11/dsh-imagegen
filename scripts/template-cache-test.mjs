@@ -8,6 +8,7 @@ import { setImageDataRoot } from '../src/image-storage-path.ts'
 import { listTemplates, refreshTemplates, readTemplateImage, clearTemplateMemo } from '../src/templates-store.ts'
 import { setTemplateProxy, templateFetch, readLimitedBody } from '../src/template-network.ts'
 import { matchesTemplate } from '../src/template-registry.ts'
+import { TEMPLATE_DOWNLOAD_CONCURRENCY } from '../src/protocol.ts'
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'imagegen-template-test-'))
 const realFetch = globalThis.fetch
@@ -44,12 +45,13 @@ try {
   assert.equal(matchesTemplate(item, 'phantomcategory'), false)
   assert.equal(matchesTemplate(item, 'cat.*'), false)
   assert.equal(matchesTemplate(item, 'red cat'), false)
-  const cases = Array.from({ length: 12 }, (_, index) => ({ id: index, title: `Case ${index}`, prompt: 'prompt', image: `case${index}.png` }))
+  assert.equal(TEMPLATE_DOWNLOAD_CONCURRENCY, 300)
+  const cases = Array.from({ length: 330 }, (_, index) => ({ id: index, title: `Case ${index}`, prompt: 'prompt', image: `case${index}.png` }))
   globalThis.fetch = async url => {
     if (String(url).endsWith('cases.json')) return Response.json({ repository: 'test', cases })
     if (String(url).endsWith('prompts.json')) return Response.json([{id:'test:one', title:'Title', prompt:'Prompt',coverUrl:'https://pbs.twimg.com/one.png',sourceUrl:'https://example.org/credit',sourceId:'test',author:'Author'}])
     downloads++; active++; peak = Math.max(peak, active)
-    await new Promise(resolve => setTimeout(resolve, 8))
+    await new Promise(resolve => setTimeout(resolve, 100))
     active--
     return new Response(png, { headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
   }
@@ -68,9 +70,20 @@ try {
   await readTemplateImage('vibeui', 'case0.png', 'all')
   assert.equal(downloads, 6, 'broken disk cache redownloads')
   await Promise.all(cases.slice(1).map(entry => readTemplateImage('vibeui', entry.image, 'all')))
-  assert.equal(peak, 4, 'host-wide concurrency is bounded')
+  assert.equal(peak, 300, 'host-wide concurrency reaches but never exceeds 300')
   assert.equal(await readTemplateImage('vibeui', 'case0.png', '../escape'), undefined)
   assert.equal(await readTemplateImage('vibeui', 'unknown.png', 'all'), undefined)
+  const priorFetch = globalThis.fetch
+  const mirrorUrls = []
+  globalThis.fetch = async url => {
+    mirrorUrls.push(String(url))
+    return String(url).includes('cdn.jsdelivr.net') ? new Response('gone', { status: 404 }) : new Response(png)
+  }
+  const mirrored = registry.cases.find(entry => entry.image.startsWith('https://cdn.jsdelivr.net/gh/'))
+  assert.ok(await readTemplateImage('image-prompts', mirrored.image, 'all'))
+  assert.equal(mirrorUrls.length, 2)
+  assert.ok(mirrorUrls[1].startsWith('https://raw.githubusercontent.com/'), 'unavailable CDN falls back to original GitHub bytes')
+  globalThis.fetch = priorFetch
   await refreshTemplates('image-prompts')
   assert.equal((await listTemplates('image-prompts')).cases[0].sourceLabel, 'test · Author')
   await assert.rejects(readLimitedBody(new Response(png), 10), /上限/)
@@ -80,6 +93,14 @@ try {
   globalThis.fetch = async () => new Response(++retryCount === 1 ? png.subarray(0, 20) : png)
   assert.ok(await readTemplateImage('vibeui', 'case0.png', 'source-canghe'))
   assert.equal(retryCount, 2, 'incomplete upstream bytes are retried before caching')
+  retryCount = 0
+  globalThis.fetch = async () => ++retryCount === 1 ? new Response('busy', { status: 503 }) : new Response(png)
+  assert.ok(await readTemplateImage('vibeui', 'case3.png', 'detail'))
+  assert.equal(retryCount, 2, 'temporary HTTP failures are retried')
+  retryCount = 0
+  globalThis.fetch = async () => { retryCount++; return new Response('gone', { status: 404 }) }
+  assert.equal(await readTemplateImage('vibeui', 'case4.png', 'detail'), undefined)
+  assert.equal(retryCount, 1, 'permanent HTTP failures are not retried')
   globalThis.fetch = async () => new Response('not an image')
   assert.equal(await readTemplateImage('vibeui', 'case1.png', 'detail'), undefined, 'invalid bytes cannot become a successful cache')
   globalThis.fetch = goodFetch
@@ -91,14 +112,14 @@ try {
   assert.equal((await listTemplates('vibeui')).origin, 'bundled', 'data-root changes cannot leak list memos')
   globalThis.fetch = realFetch
   await Promise.all([listen(upstream), listen(proxy)])
-  setTemplateProxy(`http://127.0.0.1:${proxy.address().port}`)
+  setTemplateProxy(`127.0.0.1:${proxy.address().port}`)
   const response = await templateFetch(`http://127.0.0.1:${upstream.address().port}/picture`, { signal: AbortSignal.timeout(5000) })
   assert.equal(await response.text(), 'via configured proxy')
   assert.equal(tunnels, 1, 'request actually crossed local HTTP CONNECT proxy')
   setTemplateProxy('')
   assert.equal(await (await templateFetch(`http://127.0.0.1:${upstream.address().port}/direct`)).text(), 'via configured proxy')
   assert.equal(tunnels, 1, 'empty setting connects directly')
-  console.log('TEMPLATE CACHE TEST OK: 1742 entries; title/prompt search; 5 isolated scopes; repair; concurrency=4; HTTP proxy forwarding')
+  console.log('TEMPLATE CACHE TEST OK: 1742 entries; title/prompt search; 5 isolated scopes; repair; concurrency=300; HTTP retry; bare-host proxy forwarding')
 } finally {
   globalThis.fetch = realFetch
   setTemplateProxy(''); setImageDataRoot(undefined); clearTemplateMemo()

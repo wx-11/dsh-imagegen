@@ -29,7 +29,7 @@ import { atomicWrite } from './image-store-io.ts'
 import { assertCompleteImage } from './image-format.ts'
 import { registrySnapshot } from './template-registry.ts'
 import { templateFetch, readLimitedBody } from './template-network.ts'
-import { DEFAULT_TEMPLATE_SOURCE_ID, TEMPLATE_SOURCES, type TemplateCase, type TemplateListResult, type TemplateRefreshResult, type TemplateSample } from './protocol.ts'
+import { DEFAULT_TEMPLATE_SOURCE_ID, TEMPLATE_DOWNLOAD_CONCURRENCY, TEMPLATE_SOURCES, type TemplateCase, type TemplateListResult, type TemplateRefreshResult, type TemplateSample } from './protocol.ts'
 
 /** Host-side fetch definition of one source (ids mirror TEMPLATE_SOURCES). */
 interface TemplateSourceDef {
@@ -60,6 +60,7 @@ const SOURCE_DEFS: Record<string, TemplateSourceDef> = {
     listUrl: 'https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/prompts.json',
     bundledPath: fileURLToPath(new URL('../src/templates/image-prompts-cases.json', import.meta.url)),
     allowedImageHosts: ['raw.githubusercontent.com', 'cms-assets.youmind.com', 'pbs.twimg.com', 'cdn.imgedify.com', 'camo.githubusercontent.com', 'cdn.jsdelivr.net', 'github.com', 'linux.do', 'i.mji.rip', 'storage.googleapis.com'],
+    imageUrls: githubImageUrls,
   },
   vibeui: {
     listUrl: 'https://vibeui.top/extra/awesome-gpt-image-2/data/cases.json',
@@ -77,12 +78,7 @@ const SOURCE_DEFS: Record<string, TemplateSourceDef> = {
     bundledPath: fileURLToPath(new URL('../src/templates/handraw-cases.json', import.meta.url)),
     refreshable: false,
     allowedImageHosts: ['cdn.jsdelivr.net', 'raw.githubusercontent.com'],
-    imageUrls: (ref) => {
-      const match = /^https:\/\/cdn\.jsdelivr\.net\/gh\/yang0\/handraw-style@([^/]+)(\/.*)$/i.exec(ref)
-      return match?.[1] !== undefined && match[2] !== undefined
-        ? [ref, `https://raw.githubusercontent.com/yang0/handraw-style/${match[1]}${match[2]}`]
-        : [ref]
-    },
+    imageUrls: githubImageUrls,
   },
   'prompt-signal': {
     bundledPath: fileURLToPath(new URL('../src/templates/prompt-signal-cases.json', import.meta.url)),
@@ -386,6 +382,15 @@ function isAllowedImageRef(def: TemplateSourceDef, ref: string): boolean {
 }
 
 /** All upstream URLs to try for one image reference. */
+function githubImageUrls(ref: string): string[] {
+  const cdn = /^https:\/\/cdn\.jsdelivr\.net\/gh\/([^/]+\/[^/@]+)@([^/]+)(\/.*)$/i.exec(ref)
+  if (cdn) return [ref, `https://raw.githubusercontent.com/${cdn[1]}/${cdn[2]}${cdn[3]}`]
+  const github = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:blob|raw)\/([^/]+)(\/[^?]+)(?:\?.*)?$/i.exec(ref)
+  if (github) return [`https://raw.githubusercontent.com/${github[1]}/${github[2]}${github[3]}`, ref]
+  return [ref]
+}
+
+/** All upstream URLs to try for one image reference. */
 function imageUrlsOf(def: TemplateSourceDef, ref: string): string[] {
   if (/^https?:\/\//i.test(ref)) return (def.imageUrls ?? (value => [value]))(ref)
   if (def.imageBaseUrl === undefined) return []
@@ -414,7 +419,7 @@ const downloadWaiters: Array<() => void> = []
 
 /** One host-wide limit also covers lazy thumbnails and concurrent page batches. */
 async function withDownloadSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (activeDownloads >= 4) await new Promise<void>(resolve => downloadWaiters.push(resolve))
+  if (activeDownloads >= TEMPLATE_DOWNLOAD_CONCURRENCY) await new Promise<void>(resolve => downloadWaiters.push(resolve))
   else activeDownloads += 1
   try { return await work() } finally {
     const next = downloadWaiters.shift()
@@ -429,7 +434,16 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const response = await templateFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-          if (!response.ok) { await response.body?.cancel(); break }
+          if (!response.ok) {
+            await response.body?.cancel()
+            if (attempt === 0 && [408, 429, 500, 502, 503, 504].includes(response.status)) {
+              const delay = Number(response.headers.get('retry-after'))
+              await new Promise(resolve => setTimeout(resolve, Number.isFinite(delay) && delay > 0 ? Math.min(delay * 1000, 5000) : 250))
+              continue
+            }
+            console.error('[imagegen] template image HTTP failure', response.status, new URL(url).hostname)
+            break
+          }
           const data = await readLimitedBody(response, MAX_IMAGE_BYTES)
           const mime = assertCompleteImage(data)
           await fs.mkdir(cacheDir, { recursive: true })

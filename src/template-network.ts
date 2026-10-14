@@ -5,7 +5,8 @@ let agent: ProxyAgent | undefined
 
 /** Settings changes apply to future requests; already-running requests may finish. */
 export function setTemplateProxy(value: string | undefined): void {
-  const next = value?.trim() ?? ''
+  const input = value?.trim() ?? ''
+  const next = input && !input.includes('://') ? `http://${input}` : input
   if (next === proxyUrl) return
   const previous = agent
   agent = undefined

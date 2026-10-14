@@ -43,6 +43,7 @@ export interface ImageGenConfig {
   promptApiUrl?: string
   promptApiKey?: string
   promptModel?: string
+  templateProxyUrl?: string
   /* ----- deprecated legacy single-endpoint fields (migrated to channels) ----- */
   apiUrl?: string
   apiKey?: string
@@ -163,11 +164,11 @@ class BridgeScopeController<T> implements SettingsScope<T> {
   }
 
   set(field: string, value: unknown): Promise<void> {
-    return this.enqueue(() => this.writeOps([{ op: 'set', path: [field], value }]))
+    return this.enqueue(() => this.writeOps([{ op: 'set', path: [field], value }], undefined, true))
   }
 
   unset(field: string): Promise<void> {
-    return this.enqueue(() => this.writeOps([{ op: 'unset', path: [field] }]))
+    return this.enqueue(() => this.writeOps([{ op: 'unset', path: [field] }], undefined, true))
   }
 
   mutate(ops: readonly SettingsPathOpView[], expectedRevision?: number): Promise<void> {

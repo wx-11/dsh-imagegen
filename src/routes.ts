@@ -1736,6 +1736,33 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
         }
       },
     },
+    // Cache batches acknowledge disk writes without retransmitting image bytes.
+    {
+      kind: 'exact',
+      path: TEMPLATES_API.cache,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const sourceId = templateSourceOf(body)
+        const file = body?.file
+        const scope = body?.scope
+        if (sourceId === undefined || typeof file !== 'string' || typeof scope !== 'string') {
+          writeJson(res, 400, { ok: false, message: 'invalid image cache request' })
+          return
+        }
+        try {
+          deps.resolve()
+          const found = await templates.readImage(sourceId, file, scope)
+          if (!found) {
+            writeJson(res, 502, { ok: false, message: '图片下载或缓存失败，请检查模板代理后重试' })
+            return
+          }
+          writeJson(res, 200, { ok: true, bytes: found.data.length, mime: found.mime })
+        } catch (error) {
+          writeJson(res, 502, { ok: false, message: messageOf(error) })
+        }
+      },
+    },
     // -------------------------------------- templates image (prefix, proxied)
     {
       kind: 'prefix',

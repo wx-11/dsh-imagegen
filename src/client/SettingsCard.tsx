@@ -16,7 +16,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { CardForm, booleanField, secretField, textField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
+import { CardForm, booleanField, numberField, secretField, textField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
 import { ChannelsForm, type ChannelDraft, type ChannelsFormActions, type ChannelsFormState } from './channels-form.ts'
 import type { ImageGenScope } from './settings-scope.ts'
 import { describeModel } from '../model-catalog.ts'
@@ -134,7 +134,7 @@ export class ImageGenSettingsCardController {
       booleanField('allowHeavySkills'),
       textField('skillAllowlist'),
       textField('skillOutputDir'),
-      textField('skillHeavyTimeoutMinutes'),
+      numberField('skillHeavyTimeoutMinutes'),
       textField('skillAgentPreset'),
     ], {
       secretSettled: (field) => this.scope.getSecretSetSnapshot(field),

@@ -18,7 +18,7 @@ import { TemplateThumb, imageUrlOf } from './TemplateImage.tsx'
 import { ProgressiveItems } from './ProgressiveContent.tsx'
 import { matchesTemplate } from '../template-registry.ts'
 import { errorMessage, tt } from './helpers.ts'
-import { TEMPLATE_SOURCES, type TemplateCase, type TemplateFavorite, type TemplateListResult } from '../protocol.ts'
+import { TEMPLATES_API, TEMPLATE_DOWNLOAD_CONCURRENCY, TEMPLATE_SOURCES, type TemplateCase, type TemplateFavorite, type TemplateListResult } from '../protocol.ts'
 import css from './templates.module.css'
 
 /** One case paired with the source that owns it (favorites mix sources). */
@@ -29,9 +29,6 @@ interface TemplateEntry {
 
 /** Detail-view selection keeps its source so proxy URLs and stars stay scoped. */
 interface SelectedTemplate extends TemplateEntry {}
-
-/** Concurrent image downloads while caching the whole gallery offline. */
-const CACHE_ALL_CONCURRENCY = 4
 
 /** Stable favorites key of one case within a source. */
 function favoriteKeyOf(sourceId: string, item: TemplateCase): string {
@@ -206,15 +203,21 @@ export function TemplateLibrary(props: {
       while (index < entries.length && !controller.signal.aborted) {
         const entry = entries[index++]!
         try {
-          const response = await fetch(imageUrlOf(entry.sourceId, entry.item, key), { signal: controller.signal })
+          const response = await fetch(TEMPLATES_API.cache, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ source: entry.sourceId, file: entry.item.image, scope: key }),
+            signal: controller.signal,
+          })
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
-          await response.arrayBuffer()
+          const result = await response.json() as { ok?: boolean }
+          if (result.ok !== true) throw new Error('图片缓存失败')
           state.done += 1
         } catch { if (!controller.signal.aborted) state.failed += 1 }
         publish()
       }
     }
-    try { await Promise.all(Array.from({ length: CACHE_ALL_CONCURRENCY }, () => worker())) }
+    try { await Promise.all(Array.from({ length: Math.min(TEMPLATE_DOWNLOAD_CONCURRENCY, entries.length) }, () => worker())) }
     finally { controllers.current.delete(key); state.running = false; publish() }
   }
 
