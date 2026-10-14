@@ -30,7 +30,8 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
-    "lucide-react": "^1.41.0"
+    "lucide-react": "^1.41.0",
+    "undici": "^7.30.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

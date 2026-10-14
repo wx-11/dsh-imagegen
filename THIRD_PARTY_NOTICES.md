@@ -40,3 +40,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## yukkcat/image-prompts
+
+- Registry: https://github.com/yukkcat/image-prompts
+- Synchronization code and documentation: MIT.
+- Aggregated prompts and image URLs retain their upstream authors' rights and terms; the registry does not relicense them.
+- Each bundled entry preserves its upstream identifier, author and source URL. Images are downloaded on demand rather than shipped with the package.
+- Registry data notice: https://github.com/yukkcat/image-prompts/blob/main/NOTICE.md

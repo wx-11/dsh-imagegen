@@ -10,31 +10,12 @@ import { useEffect, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ImageGenApi } from './api.ts'
 import { tt } from './helpers.ts'
-import { TEMPLATES_API, type TemplateSample } from '../protocol.ts'
+import { TemplateThumb } from './TemplateImage.tsx'
+import { type TemplateSample } from '../protocol.ts'
 import css from './inspiration.module.css'
 
 /** Card count per deal — a 4×3 wall that uses the canvas's spare width. */
 const SAMPLE_COUNT = 12
-
-/** Same-origin proxy URL of one sampled case's reference image. */
-function imageUrlOf(sample: TemplateSample): string {
-  return `${TEMPLATES_API.image}/${encodeURIComponent(sample.sourceId)}/${encodeURIComponent(sample.case.image)}`
-}
-
-/** One thumbnail that degrades to a text tile when the image 404s. */
-function SampleThumb(props: { sample: TemplateSample }) {
-  const [failed, setFailed] = useState(false)
-  return (
-    <span className={css.thumbWrap}>
-      {props.sample.case.image !== '' && !failed ? (
-        <img className={css.thumb} src={imageUrlOf(props.sample)} alt={props.sample.case.title} loading="lazy" onError={() => { setFailed(true) }} />
-      ) : (
-        <span className={css.thumbFallback} aria-hidden="true">{props.sample.case.title}</span>
-      )}
-      <span className={css.thumbTitle}>{props.sample.case.title}</span>
-    </span>
-  )
-}
 
 /** The random-case wall shown while the canvas has no results. */
 export function InspirationGallery(props: {
@@ -91,7 +72,7 @@ export function InspirationGallery(props: {
                 title={tt('inspiration.useHint')}
                 onClick={() => { onUse(sample.case.prompt) }}
               >
-                <SampleThumb sample={sample} />
+                <span className={css.thumbWrap}><TemplateThumb sourceId={sample.sourceId} item={sample.case} scope="inspiration" className={css.thumb} /><span className={css.thumbTitle}>{sample.case.title}</span></span>
               </button>
             ))}
           </div>

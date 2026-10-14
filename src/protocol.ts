@@ -273,6 +273,11 @@ export const TEMPLATE_SOURCES: TemplateSourceMeta[] = [
     description: 'EvoLink 整理的 GPT Image 2 电商、广告、人像、海报、角色与 UI 案例',
     refreshable: false,
   },
+  {
+    id: 'image-prompts', label: 'Image Prompts',
+    homepage: 'https://github.com/yukkcat/image-prompts',
+    description: 'yukkcat/image-prompts 多来源提示词，保留原作者与来源链接',
+  },
 ]
 
 /** Default source id when a request does not name one (legacy clients). */

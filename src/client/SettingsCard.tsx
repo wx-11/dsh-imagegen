@@ -35,6 +35,7 @@ export interface ImageGenSettings {
   promptApiUrl?: string
   promptApiKey?: string
   promptModel?: string
+  templateProxyUrl?: string
   localStoragePath?: string
   storageEnabled?: boolean
   storageEndpoint?: string
@@ -64,6 +65,7 @@ export interface ImageGenSettingsCardState extends CardShell {
   promptApiUrl: CardFieldState
   promptApiKey: CardFieldState
   promptModel: CardFieldState
+  templateProxyUrl: CardFieldState
   localStoragePath: CardFieldState
   storageEnabled: CardFieldState
   storageEndpoint: CardFieldState
@@ -118,6 +120,7 @@ export class ImageGenSettingsCardController {
       textField('promptApiUrl'),
       secretField('promptApiKey'),
       textField('promptModel'),
+      textField('templateProxyUrl'),
       textField('localStoragePath'),
       booleanField('storageEnabled'),
       textField('storageEndpoint'),
@@ -151,6 +154,7 @@ export class ImageGenSettingsCardController {
       promptApiUrl: this.form.field('promptApiUrl'),
       promptApiKey: this.form.field('promptApiKey'),
       promptModel: this.form.field('promptModel'),
+      templateProxyUrl: this.form.field('templateProxyUrl'),
       localStoragePath: this.form.field('localStoragePath'),
       storageEnabled: this.form.field('storageEnabled'),
       storageEndpoint: this.form.field('storageEndpoint'),
@@ -783,6 +787,16 @@ export function ImageGenSettingsSection(props: ImageGenSettingsSectionProps) {
               expanded={activeSection === 'storage'}
               onToggle={() => { setActiveSection(activeSection === 'storage' ? null : 'storage') }}
             >
+            <ValueField
+              id="dsh-imagegen-settings-template-proxy"
+              label={t('settings.templateProxy')}
+              hint={t('settings.templateProxyHint')}
+              placeholder="http://127.0.0.1:7890"
+              {...fieldProps}
+              {...state.templateProxyUrl}
+              onEdit={(text) => { props.edit('templateProxyUrl', text) }}
+              onReset={() => { props.resetField('templateProxyUrl') }}
+            />
             <ValueField
               id="dsh-imagegen-settings-local-storage-path"
               label={t('settings.localStoragePath')}

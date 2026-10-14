@@ -581,3 +581,8 @@
     grid-template-rows: minmax(0, 3fr) minmax(0, 4fr);
   }
 }
+
+.imageState { display: block; width: 100%; height: 100%; position: relative; }
+.cacheBadge { position: absolute; bottom: 4px; left: 4px; border-radius: 4px; padding: 2px 5px; background: rgba(0,0,0,.65); color: #fff; font-size: 10px; }
+.cacheBadge[role="button"] { cursor: pointer; }
+.card { content-visibility: auto; contain-intrinsic-size: auto 240px; }

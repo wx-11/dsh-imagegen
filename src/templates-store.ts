@@ -22,9 +22,13 @@
 
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { imageDataRoot } from './image-storage-path.ts'
+import { atomicWrite } from './image-store-io.ts'
+import { assertCompleteImage } from './image-format.ts'
+import { registrySnapshot } from './template-registry.ts'
+import { templateFetch, readLimitedBody } from './template-network.ts'
 import { DEFAULT_TEMPLATE_SOURCE_ID, TEMPLATE_SOURCES, type TemplateCase, type TemplateListResult, type TemplateRefreshResult, type TemplateSample } from './protocol.ts'
 
 /** Host-side fetch definition of one source (ids mirror TEMPLATE_SOURCES). */
@@ -52,6 +56,11 @@ interface TemplateSourceDef {
 
 /** Source registry (host half): where each TEMPLATE_SOURCES entry loads from. */
 const SOURCE_DEFS: Record<string, TemplateSourceDef> = {
+  'image-prompts': {
+    listUrl: 'https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/prompts.json',
+    bundledPath: fileURLToPath(new URL('../src/templates/image-prompts-cases.json', import.meta.url)),
+    allowedImageHosts: ['raw.githubusercontent.com', 'cms-assets.youmind.com', 'pbs.twimg.com', 'cdn.imgedify.com', 'camo.githubusercontent.com', 'cdn.jsdelivr.net', 'github.com', 'linux.do', 'i.mji.rip', 'storage.googleapis.com'],
+  },
   vibeui: {
     listUrl: 'https://vibeui.top/extra/awesome-gpt-image-2/data/cases.json',
     imageBaseUrl: 'https://vibeui.top/extra/awesome-gpt-image-2/data/images/',
@@ -117,13 +126,6 @@ const CATEGORY_ZH: Record<string, string> = {
   'Animals & Nature': '动物与自然',
   'Other Creative Uses': '其他创意用途',
 }
-
-const DATA_DIR = path.join(homedir(), '.dsh', 'dsh-imagegen')
-const REFRESHED_DIR = path.join(DATA_DIR, 'templates')
-const IMAGE_CACHE_ROOT = path.join(DATA_DIR, 'template-images')
-/** Pre-1.6 single-source locations (vibeui fallbacks). */
-const LEGACY_SNAPSHOT_PATH = path.join(REFRESHED_DIR, 'cases.json')
-const LEGACY_IMAGE_DIR = IMAGE_CACHE_ROOT
 
 /** Budget for one upstream fetch (list refresh or one image). */
 const FETCH_TIMEOUT_MS = 60_000
@@ -242,23 +244,24 @@ async function readSnapshotFile(file: string): Promise<ReturnType<typeof parseSn
 export async function listTemplates(sourceId: string = DEFAULT_TEMPLATE_SOURCE_ID): Promise<TemplateListResult> {
   const def = sourceDefOf(sourceId)
   if (def === undefined) throw new Error(`未知的模板库来源：${sourceId}`)
-  const memo = memos.get(sourceId)
+  const memoKey = `${imageDataRoot()}/${sourceId}`
+  const memo = memos.get(memoKey)
   if (memo !== undefined) return memo
-  const refreshed = await readSnapshotFile(path.join(REFRESHED_DIR, sourceId, 'cases.json'))
-    ?? (def.legacySnapshotPath !== undefined ? await readSnapshotFile(LEGACY_SNAPSHOT_PATH) : undefined)
+  const refreshed = await readSnapshotFile(path.join(imageDataRoot(), 'templates', sourceId, 'cases.json'))
+    ?? (def.legacySnapshotPath !== undefined ? await readSnapshotFile(path.join(imageDataRoot(), 'templates', 'cases.json')) : undefined)
   if (refreshed !== undefined) {
     const result: TemplateListResult = { sourceId, ...refreshed, total: refreshed.cases.length, origin: 'refreshed' }
-    memos.set(sourceId, result)
+    memos.set(`${imageDataRoot()}/${sourceId}`, result)
     return result
   }
   const bundled = await readSnapshotFile(def.bundledPath)
   if (bundled !== undefined) {
     const result: TemplateListResult = { sourceId, ...bundled, total: bundled.cases.length, origin: 'bundled' }
-    memos.set(sourceId, result)
+    memos.set(`${imageDataRoot()}/${sourceId}`, result)
     return result
   }
   const result: TemplateListResult = { sourceId, cases: [], total: 0, origin: 'bundled', repository: 'freestylefly/awesome-gpt-image-2', fetchedAt: '' }
-  memos.set(sourceId, result)
+  memos.set(`${imageDataRoot()}/${sourceId}`, result)
   return result
 }
 
@@ -275,7 +278,7 @@ export async function refreshTemplates(sourceId: string = DEFAULT_TEMPLATE_SOURC
   }
   let response: Response
   try {
-    response = await fetch(def.listUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    response = await templateFetch(def.listUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
   } catch (error) {
     throw new Error(`无法连接模板库源站（${sourceId}）：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -286,7 +289,7 @@ export async function refreshTemplates(sourceId: string = DEFAULT_TEMPLATE_SOURC
   } catch {
     throw new Error('模板库源站返回了非 JSON 响应')
   }
-  const parsed = parseSnapshot(payload)
+  const parsed = parseSnapshot(sourceId === 'image-prompts' ? registrySnapshot(payload) : payload)
   if (parsed === undefined) throw new Error('模板库源站数据格式无效')
   const fetchedAt = new Date().toISOString()
   const snapshot = {
@@ -296,13 +299,11 @@ export async function refreshTemplates(sourceId: string = DEFAULT_TEMPLATE_SOURC
     totalCases: parsed.cases.length,
     cases: parsed.cases,
   }
-  const target = path.join(REFRESHED_DIR, sourceId, 'cases.json')
+  const target = path.join(imageDataRoot(), 'templates', sourceId, 'cases.json')
   await fs.mkdir(path.dirname(target), { recursive: true })
-  const tmp = `${target}.tmp-${process.pid}`
-  await fs.writeFile(tmp, JSON.stringify(snapshot), 'utf8')
-  await fs.rename(tmp, target)
+  await atomicWrite(target, JSON.stringify(snapshot))
   const result: TemplateListResult = { sourceId, cases: parsed.cases, total: parsed.cases.length, origin: 'refreshed', repository: parsed.repository, fetchedAt }
-  memos.set(sourceId, result)
+  memos.set(`${imageDataRoot()}/${sourceId}`, result)
   return { sourceId, total: parsed.cases.length, fetchedAt }
 }
 
@@ -370,28 +371,6 @@ export async function syncAllTemplates(): Promise<TemplateSyncReport[]> {
   return reports
 }
 
-/** MIME type for a known image extension; undefined when the name has none. */
-function mimeOfFile(file: string): string | undefined {
-  switch (path.extname(file).toLowerCase()) {
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg'
-    case '.png': return 'image/png'
-    case '.webp': return 'image/webp'
-    case '.gif': return 'image/gif'
-    default: return undefined
-  }
-}
-
-/** Sniff the five image formats the template proxy serves. */
-function sniffImageMime(data: Buffer): string | undefined {
-  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg'
-  if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
-  if (data.length >= 12 && data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
-  if (data.length >= 6 && (data.subarray(0, 6).toString('ascii') === 'GIF87a' || data.subarray(0, 6).toString('ascii') === 'GIF89a')) return 'image/gif'
-  return undefined
-}
-
-/** True when an image reference is safe for a specific source. */
 function isAllowedImageRef(def: TemplateSourceDef, ref: string): boolean {
   if (!/^https?:\/\//i.test(ref)) return IMAGE_FILE_PATTERN.test(ref) && !ref.includes('..')
   if (ref.length > MAX_IMAGE_URL_LENGTH || ref.includes('..')) return false
@@ -429,37 +408,40 @@ function cacheFileOf(ref: string): string {
   return `${hash}${ext}`
 }
 
-/** Download one reference image into the source's disk cache; undefined on failure. */
-async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile: string, cacheDir: string): Promise<{ data: Buffer; mime: string } | undefined> {
-  for (const url of imageUrlsOf(def, ref)) {
-    let response: Response
-    try {
-      response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-    } catch {
-      continue
-    }
-    if (!response.ok) continue
-    const declared = Number(response.headers.get('content-length') ?? 0)
-    if (declared > MAX_IMAGE_BYTES) continue
-    const data = Buffer.from(await response.arrayBuffer())
-    if (data.byteLength === 0 || data.byteLength > MAX_IMAGE_BYTES) continue
-    const headerMime = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
-    const mime = headerMime !== undefined && /^image\/(png|jpeg|webp|gif)$/.test(headerMime)
-      ? headerMime
-      : sniffImageMime(data) ?? mimeOfFile(ref)
-    if (mime === undefined) continue
-    try {
-      await fs.mkdir(cacheDir, { recursive: true })
-      const target = path.join(cacheDir, cacheFile)
-      const tmp = `${target}.tmp-${process.pid}`
-      await fs.writeFile(tmp, data)
-      await fs.rename(tmp, target)
-    } catch {
-      // A cache-write failure must not lose the already-fetched bytes.
-    }
-    return { data, mime }
+/** Shared transfer budget; cache files and in-flight keys stay view-scoped. */
+let activeDownloads = 0
+const downloadWaiters: Array<() => void> = []
+
+/** One host-wide limit also covers lazy thumbnails and concurrent page batches. */
+async function withDownloadSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeDownloads >= 4) await new Promise<void>(resolve => downloadWaiters.push(resolve))
+  else activeDownloads += 1
+  try { return await work() } finally {
+    const next = downloadWaiters.shift()
+    if (next) next()
+    else activeDownloads -= 1
   }
-  return undefined
+}
+
+async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile: string, cacheDir: string): Promise<{ data: Buffer; mime: string } | undefined> {
+  return withDownloadSlot(async () => {
+    for (const url of imageUrlsOf(def, ref)) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const response = await templateFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+          if (!response.ok) { await response.body?.cancel(); break }
+          const data = await readLimitedBody(response, MAX_IMAGE_BYTES)
+          const mime = assertCompleteImage(data)
+          await fs.mkdir(cacheDir, { recursive: true })
+          await atomicWrite(path.join(cacheDir, cacheFile), data)
+          return { data, mime }
+        } catch (error) {
+          console.error('[imagegen] template image download/cache failed', error instanceof Error ? error.message : String(error))
+        }
+      }
+    }
+    return undefined
+  })
 }
 
 /**
@@ -468,27 +450,21 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
  * in the active case list are served, so the route can never act as an open
  * proxy. Undefined when the name is unknown or the fetch failed.
  */
-export async function readTemplateImage(sourceId: string, file: string): Promise<{ data: Buffer; mime: string } | undefined> {
+export async function readTemplateImage(sourceId: string, file: string, scope: string = 'library'): Promise<{ data: Buffer; mime: string } | undefined> {
+  if (!/^(library|inspiration|all|favorites|detail|source-[a-z-]+)$/.test(scope)) return undefined
   const def = sourceDefOf(sourceId)
   if (def === undefined) return undefined
   if (!isAllowedImageRef(def, file)) return undefined
   const list = await listTemplates(sourceId)
   if (!list.cases.some(entry => entry.image === file)) return undefined
-  const cacheDir = path.join(IMAGE_CACHE_ROOT, sourceId)
+  const cacheDir = path.join(imageDataRoot(), 'template-images', scope, sourceId)
   const cacheFile = cacheFileOf(file)
   try {
     const data = await fs.readFile(path.join(cacheDir, cacheFile))
-    const mime = mimeOfFile(cacheFile) ?? sniffImageMime(data)
+    const mime = assertCompleteImage(data)
     if (mime !== undefined) return { data, mime }
   } catch { /* fall through to legacy cache / download */ }
-  if (def.legacyImageDir !== undefined && IMAGE_FILE_PATTERN.test(file)) {
-    try {
-      const data = await fs.readFile(path.join(LEGACY_IMAGE_DIR, file))
-      const mime = mimeOfFile(file) ?? sniffImageMime(data)
-      if (mime !== undefined) return { data, mime }
-    } catch { /* fall through to download */ }
-  }
-  const cacheKey = `${sourceId}/${file}`
+  const cacheKey = `${cacheDir}/${file}`
   const inflight = inflightImages.get(cacheKey)
   if (inflight !== undefined) return inflight
   const pending = fetchTemplateImage(def, file, cacheFile, cacheDir)

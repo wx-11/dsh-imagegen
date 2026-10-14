@@ -28,6 +28,7 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { IMAGEGEN_SETTINGS_NAMESPACE, isChannelProtocolPreference, isSubscriptionProvider, type CanvasSkillConfigApplyRequest, type CanvasSkillConfigApplyResult, type CanvasSkillConfigSaveRequest, type CanvasSkillConfigSaveResult, type CanvasSkillConfigView, type CanvasSkillInstallRequest, type CanvasSkillInstallResult, type CanvasSkillLibrary, type CanvasSkillRemoveResult, type ChannelConfig, type ModelMapping } from './protocol.ts'
 import { makeRoutes, type SettingsSeam } from './routes.ts'
 import { SubscriptionManager } from './subscription/manager.ts'
+import { setTemplateProxy } from './template-network.ts'
 import { syncAllTemplates } from './templates-store.ts'
 import { setStorageSyncHandler, putObject, type StorageSyncConfig } from './storage-sync.ts'
 
@@ -377,6 +378,7 @@ export interface Config {
   /** Chat model used to expand short image prompts. */
   promptModel?: string
   /** Local root for generated/history/gallery/canvas images. Empty keeps the default under DSH_HOME. */
+  templateProxyUrl?: string
   localStoragePath?: string
   /** Sync saved images to an S3-compatible object store (COS / OSS / Qiniu S3 …). */
   storageEnabled?: boolean
@@ -449,6 +451,7 @@ const configSchema = z.object({
   promptApiUrl: z.string().default('').volatile(),
   promptApiKey: z.string().role('secret').default('').volatile(),
   promptModel: z.string().default('').volatile(),
+  templateProxyUrl: z.string().default('').volatile(),
   localStoragePath: z.string().default('').volatile(),
   storageEnabled: z.boolean().default(false).volatile(),
   storageEndpoint: z.string().default('').volatile(),
@@ -625,6 +628,7 @@ export function apply(ctx: Context, config?: Config): (() => void) | void {
   const resolve = (): EffectiveConfig => {
     const value = unwrapConfig(current())
     setImageDataRoot(value.localStoragePath)
+    setTemplateProxy(value.templateProxyUrl)
     let channels = normalizeChannels(value.channels)
     // Settings scopes are deep-frozen by the host. Legacy migration adds the
     // synthesized default-channel secret, so always work on a detached copy.

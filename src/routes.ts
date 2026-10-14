@@ -129,7 +129,7 @@ export interface ImageGenRoutesDeps {
     list: (sourceId: string) => Promise<TemplateListResult>
     refresh: (sourceId: string) => Promise<TemplateRefreshResult>
     sample: (count: number) => Promise<TemplateSample[]>
-    readImage: (sourceId: string, file: string) => Promise<{ data: Buffer; mime: string } | undefined>
+    readImage: (sourceId: string, file: string, scope?: string) => Promise<{ data: Buffer; mime: string } | undefined>
   }
   /** Overrideable template-favorites backend, primarily for host integration tests. */
   favorites?: {
@@ -1691,6 +1691,7 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
           return
         }
         try {
+          deps.resolve()
           const result = await templates.list(sourceId)
           writeJson(res, 200, { ok: true, ...result })
         } catch (error) {
@@ -1711,6 +1712,7 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
           return
         }
         try {
+          deps.resolve()
           const result = await templates.refresh(sourceId)
           writeJson(res, 200, { ok: true, ...result })
         } catch (error) {
@@ -1757,7 +1759,9 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
           writeJson(res, 404, { error: 'not found' })
           return
         }
-        const found = await templates.readImage(sourceId, file)
+        deps.resolve()
+        const scope = new URL(req.url ?? '/', 'http://localhost').searchParams.get('scope') ?? 'library'
+        const found = await templates.readImage(sourceId, file, scope)
         if (found === undefined) {
           writeJson(res, 404, { error: 'not found' })
           return

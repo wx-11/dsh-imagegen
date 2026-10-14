@@ -397,7 +397,13 @@ async function writeSnapshot(name, out, snapshot) {
   console.log(`[${name}] wrote ${snapshot.cases.length} cases -> ${out}`)
 }
 
+async function buildImagePrompts() {
+  const { registrySnapshot } = await import('../src/template-registry.ts')
+  return { ...registrySnapshot(await fetchJson('https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/prompts.json')), fetchedAt: new Date().toISOString() }
+}
+
 const SOURCES = {
+  'image-prompts': { build: buildImagePrompts, out: resolve(ROOT, 'src/templates/image-prompts-cases.json') },
   vibeui: {
     build: () => fetchJson('https://vibeui.top/extra/awesome-gpt-image-2/data/cases.json'),
     out: resolve(ROOT, 'src/templates/cases.json'),

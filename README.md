@@ -168,3 +168,7 @@ dsh plugin --profile web add ./dickpy-dsh-imagegen-<版本>.tgz
 [Apache-2.0](./LICENSE)
 
 内置模板所引用的第三方项目与许可见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
+模板库新增 Image Prompts（yukkcat/image-prompts）来源，支持在线刷新；「全部」标签跨来源搜索，搜索仅对标题与提示词正文进行不区分大小写的字面子串匹配。可用 `pnpm fetch-templates image-prompts` 更新发布快照。
+
+「设置 → 生图配置 → 图片存储」的「模板下载代理」可填写 `http://127.0.0.1:7890` 等 HTTP(S) 代理地址。模板列表刷新及所有模板参考图下载均使用该设置；留空直连，不自动读取系统代理。模板来源、全部、收藏、灵感墙和详情使用独立缓存目录/请求键；批量缓存按标签独立记录成功、失败与进度。图片下载最多同时 4 个，校验完整性后原子写入当前本地存储目录，损坏缓存自动重新下载，失败可重试。生成历史与素材库仍使用各自的持久化目录。

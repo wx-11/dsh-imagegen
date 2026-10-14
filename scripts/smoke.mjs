@@ -3762,6 +3762,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     createdAt: 1,
     updatedAt: 1,
   }
+  const templateImageReads = new Map()
   const fetchStub = async (input, init) => {
     const path = String(input)
     requestPaths.push(path)
@@ -3922,6 +3923,13 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
         blob: async () => new jsdomWindow.Blob([pngBytes], { type: 'image/png' }),
       }
     }
+    if (path.startsWith('/api/dsh-imagegen/templates/image/')) {
+      const scope = new URL(path, 'http://localhost').searchParams.get('scope')
+      const attempt = (templateImageReads.get(scope) ?? 0) + 1
+      templateImageReads.set(scope, attempt)
+      await new Promise(resolve => setTimeout(resolve, 80))
+      return { ok: scope !== 'source-vibeui' || attempt > 1, status: 404, arrayBuffer: async () => pngBytes }
+    }
     if (path.endsWith('/templates/list')) {
       return {
         ok: true,
@@ -3939,7 +3947,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
             sourceLabel: '@author',
             sourceUrl: '',
             githubUrl: '',
-            image: '',
+            image: 'case1.png',
             featured: false,
           }],
           total: 1,
@@ -4045,6 +4053,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
       get src() { return this._src }
     },
     fetch: fetchStub,
+    AbortController: jsdomWindow.AbortController,
     console,
   }
   // jsdom's window.window is a getter-only property; only plain-object
@@ -4484,6 +4493,41 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     await new Promise(resolve => setTimeout(resolve, 100))
     const libraryModal = jsdomDocument.querySelector('[role="dialog"][aria-label="提示词模板库"]')
     assert.ok(libraryModal !== null, 'template modal rendered')
+    const cacheButton = () => [...libraryModal.querySelectorAll('button')].find(button => /缓存全部图片|缓存中|成功|图片已全部缓存/.test(button.textContent ?? ''))
+    cacheButton().click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(cacheButton().textContent.includes('缓存中'), 'first tab has its own active transfer')
+    const secondSourceTab = [...libraryModal.querySelectorAll('[role="tab"]')].find(tab => tab.textContent?.includes('沧河'))
+    secondSourceTab.click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(cacheButton().textContent.includes('缓存全部图片'), 'switching tabs must not inherit downloading state')
+    cacheButton().click()
+    await new Promise(resolve => setTimeout(resolve, 120))
+    assert.ok(cacheButton().textContent.includes('图片已全部缓存'), 'second source succeeds independently')
+    const firstSourceTab = [...libraryModal.querySelectorAll('[role="tab"]')].find(tab => tab.textContent?.includes('精选案例库'))
+    firstSourceTab.click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.ok(cacheButton().textContent.includes('失败 1'), 'HTTP failure is counted and retained in its own tab')
+    cacheButton().click()
+    await new Promise(resolve => setTimeout(resolve, 120))
+    assert.ok(cacheButton().textContent.includes('图片已全部缓存'), 'failed batch can be retried')
+    const templateSearch = libraryModal.querySelector('input[type="search"]')
+    const searchTemplates = async value => {
+      nativeInputSetter.call(templateSearch, value)
+      templateSearch.dispatchEvent(new jsdomWindow.Event('input', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 30))
+    }
+    await searchTemplates('@AUTHOR')
+    assert.equal(libraryModal.querySelectorAll('button').length > 0, true)
+    assert.equal([...libraryModal.querySelectorAll('button')].some(button => button.textContent?.includes('Template poster')), false, 'author must not match')
+    await searchTemplates('REUSABLE TEMPLATE')
+    assert.ok([...libraryModal.querySelectorAll('button')].some(button => button.textContent?.includes('Template poster')), 'prompt matching ignores case')
+    const allTab = [...libraryModal.querySelectorAll('[role="tab"]')].find(tab => tab.textContent?.startsWith('全部'))
+    assert.ok(allTab, 'all-sources tab exists')
+    allTab.click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal([...libraryModal.querySelectorAll('button')].filter(button => button.textContent?.includes('Template poster')).length, 6, 'all tab searches every source')
+    await searchTemplates('TEMPLATE POSTER')
     const templateCard = [...libraryModal.querySelectorAll('button')]
       .find(button => button.textContent?.includes('Template poster'))
     assert.ok(templateCard !== undefined, 'template card rendered')
