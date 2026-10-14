@@ -8,7 +8,7 @@
  * a platform module) so the studio matches the dsh shell look by construction.
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
@@ -35,6 +35,7 @@ import {
   type ChatImageEventDetail, type ConversationDraftAttachment, type ConversationService,
 } from './conversation-sync.ts'
 import { Select } from './Select.tsx'
+import { LazyDetails, ProgressiveItems } from './ProgressiveContent.tsx'
 import { IMAGE_RATIOS, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
 import css from './panel.module.css'
 
@@ -198,9 +199,15 @@ function useElapsed(running: boolean, startedAt: number | null): number {
   return elapsed
 }
 
-/** Data URL for a generated image. */
+/** Reuse large image strings across polling, editing and preview renders. */
+const imageSources = new WeakMap<GeneratedImage, string>()
 function srcOf(image: GeneratedImage): string {
-  return `data:${image.mime};base64,${image.b64}`
+  let source = imageSources.get(image)
+  if (source === undefined) {
+    source = `data:${image.mime};base64,${image.b64}`
+    imageSources.set(image, source)
+  }
+  return source
 }
 
 /** Decode one durable conversation attachment into the panel's image shape. */
@@ -326,23 +333,32 @@ function useSidebarHistoryHost(): HTMLDivElement | null {
  *  GeneratedImage[] (base64), so the canvas/preview can reuse the same
  *  rendering path as a fresh generation. */
 async function historyImagesToGenerated(refs: HistoryImageRef[]): Promise<GeneratedImage[]> {
-  return Promise.all(refs.map(async ref => {
-    const response = await fetch(ref.url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await response.blob()
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
-      reader.onerror = () => reject(new Error('image read failed'))
-      reader.readAsDataURL(blob)
-    })
-    const comma = dataUrl.indexOf(',')
-    return {
-      b64: comma >= 0 ? dataUrl.slice(comma + 1) : '',
-      mime: ref.mime,
-      ...ref.revisedPrompt === undefined ? {} : { revisedPrompt: ref.revisedPrompt },
+  const images: GeneratedImage[] = new Array(refs.length)
+  let next = 0
+  // Full-size images and FileReader buffers are expensive: keep four reads
+  // in flight, preserving the original order for preview navigation.
+  await Promise.all(Array.from({ length: Math.min(4, refs.length) }, async () => {
+    while (next < refs.length) {
+      const index = next++
+      const ref = refs[index]!
+      const response = await fetch(ref.url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const blob = await response.blob()
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+        reader.onerror = () => reject(new Error('image read failed'))
+        reader.readAsDataURL(blob)
+      })
+      const comma = dataUrl.indexOf(',')
+      images[index] = {
+        b64: comma >= 0 ? dataUrl.slice(comma + 1) : '',
+        mime: ref.mime,
+        ...ref.revisedPrompt === undefined ? {} : { revisedPrompt: ref.revisedPrompt },
+      }
     }
   }))
+  return images
 }
 
 /** Compact, locale-independent timestamp for history entries. */
@@ -489,6 +505,11 @@ function newComparisonId(): string {
 function mergeTaskSummary(summary: GenerationTaskSummary, previous: GenerationTask | undefined): GenerationTask {
   const { resultAvailable: _resultAvailable, ...task } = summary
   if (previous === undefined) return task
+  // Requests are immutable for a queue task. Reuse unchanged snapshots so
+  // idle polling does not repaint hundreds of image cards.
+  if (previous.status === summary.status && previous.error === summary.error
+    && previous.startedAt === summary.startedAt && previous.finishedAt === summary.finishedAt
+    && (!summary.resultAvailable || previous.result !== undefined)) return previous
   const merged: GenerationTask = {
     ...previous,
     ...task,
@@ -660,7 +681,8 @@ export function ImageGenPanel(props: {
   const [historyQuery, setHistoryQuery] = useState('')
   const [historyModelFilter, setHistoryModelFilter] = useState('all')
   const [historyRatioFilter, setHistoryRatioFilter] = useState('all')
-  const [preview, setPreview] = useState<{ images: GeneratedImage[]; index: number } | null>(null)
+  const [preview, setPreview] = useState<{ images: GeneratedImage[]; index: number; refs?: HistoryImageRef[] } | null>(null)
+  const previewVersionRef = useRef(0)
   const [previewScale, setPreviewScale] = useState(1)
   const [promptCopied, setPromptCopied] = useState(false)
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
@@ -826,27 +848,30 @@ export function ImageGenPanel(props: {
 
   // Durable records are authoritative; only active/unpersisted failures need
   // an in-memory row. Deleted successful history must not reappear on polling.
-  const taskEntries: HistoryEntry[] = tasks
-    .filter(task => !dismissedTaskIdsRef.current.has(task.id) && !history.some(entry => (entry.taskId ?? entry.id) === task.id)
-      && (task.status === 'queued' || task.status === 'running'
-        || task.status === 'failed' || task.status === 'cancelled'
-        || task.result?.historyError !== undefined))
-    .map(task => ({
-      ...task.request, id: task.id, taskId: task.id, status: task.status,
-      createdAt: task.createdAt, startedAt: task.startedAt, finishedAt: task.finishedAt,
-      error: task.error ?? task.result?.historyError, quality: 'auto', detail: '',
-      images: (task.result?.images ?? []).map(image => ({ ...image, url: srcOf(image) })),
-      references: [task.request.image, ...(task.request.images ?? [])]
-        .filter((url): url is string => !!url).map(url => ({ url, mime: 'image/png' })),
-    }))
-  const taskHistory = [...taskEntries, ...history].sort((a, b) => b.createdAt - a.createdAt)
-  const filteredHistory = groupHistoryEntries(taskHistory).filter(group => group.entries.some(entry => {
+  const taskHistory = useMemo(() => {
+    const persistedIds = new Set(history.map(entry => entry.taskId ?? entry.id))
+    const taskEntries: HistoryEntry[] = tasks
+      .filter(task => !dismissedTaskIdsRef.current.has(task.id) && !persistedIds.has(task.id)
+        && (task.status === 'queued' || task.status === 'running'
+          || task.status === 'failed' || task.status === 'cancelled'
+          || task.result?.historyError !== undefined))
+      .map(task => ({
+        ...task.request, id: task.id, taskId: task.id, status: task.status,
+        createdAt: task.createdAt, startedAt: task.startedAt, finishedAt: task.finishedAt,
+        error: task.error ?? task.result?.historyError, quality: 'auto', detail: '',
+        images: (task.result?.images ?? []).map(image => ({ ...image, url: srcOf(image) })),
+        references: [task.request.image, ...(task.request.images ?? [])]
+          .filter((url): url is string => !!url).map(url => ({ url, mime: 'image/png' })),
+      }))
+    return [...taskEntries, ...history].sort((a, b) => b.createdAt - a.createdAt)
+  }, [tasks, history])
+  const filteredHistory = useMemo(() => groupHistoryEntries(taskHistory).filter(group => group.entries.some(entry => {
     const query = historyQuery.trim().toLocaleLowerCase()
     const models = modelsOfHistoryEntry(entry)
     return (query === '' || `${entry.prompt} ${models.join(' ')}`.toLocaleLowerCase().includes(query))
       && (historyModelFilter === 'all' || models.includes(historyModelFilter))
       && (historyRatioFilter === 'all' || normalizeSize(entry.size) === historyRatioFilter)
-  }))
+  })), [taskHistory, historyQuery, historyModelFilter, historyRatioFilter])
 
   // Load the host-persisted history and gallery once, when the panel first
   // becomes visible. Keeping this out of boot prevents eager full-size image
@@ -947,7 +972,7 @@ export function ImageGenPanel(props: {
             && !previousTasks.some(old => old.id === task.id && old.status === 'completed')
             && !comparison?.taskIds.includes(task.id))
           tasksRef.current = next
-          setTasks(next)
+          if (next.length !== previousTasks.length || next.some((task, index) => task !== previousTasks[index])) setTasks(next)
           if (completed?.result !== undefined) {
             setImages(completed.result.images)
             setError(completed.result.historyError ?? null)
@@ -957,7 +982,9 @@ export function ImageGenPanel(props: {
           if (active && (completed !== undefined || Date.now() - lastHistoryRefresh >= 4500)) {
             const revision = historyRevisionRef.current
             const entries = await api.historyList()
-            if (!disposed && revision === historyRevisionRef.current) setHistory(entries)
+            if (!disposed && revision === historyRevisionRef.current) {
+              setHistory(previous => JSON.stringify(previous) === JSON.stringify(entries) ? previous : entries)
+            }
             lastHistoryRefresh = Date.now()
           }
         } catch {
@@ -1371,12 +1398,31 @@ export function ImageGenPanel(props: {
   }
 
   const openPreview = (previewImages: GeneratedImage[], index: number): void => {
+    previewVersionRef.current += 1
     setPreview({ images: previewImages, index })
     setPreviewScale(1)
     setPromptCopied(false)
   }
 
+  // A task may contain 100 full-size images. Preview only fetches the
+  // selected image, then loads neighbours when the user navigates to them.
+  const openHistoryPreview = async (refs: HistoryImageRef[], index: number): Promise<void> => {
+    const version = ++previewVersionRef.current
+    try {
+      const [image] = await historyImagesToGenerated(refs.slice(index, index + 1))
+      if (image === undefined || version !== previewVersionRef.current) return
+      const images: GeneratedImage[] = new Array(refs.length)
+      images[index] = image
+      setPreview({ images, index, refs })
+      setPreviewScale(1)
+      setPromptCopied(false)
+    } catch (caught) {
+      if (version === previewVersionRef.current) setError(errorMessage(caught))
+    }
+  }
+
   const closePreview = (): void => {
+    previewVersionRef.current += 1
     setPreview(null)
     setPreviewScale(1)
     setPromptCopied(false)
@@ -1384,13 +1430,23 @@ export function ImageGenPanel(props: {
 
   /** Step the preview by ±1, wrapping around. */
   const stepPreview = (delta: number): void => {
-    setPreviewScale(1)
-    setPromptCopied(false)
-    setPreview(current => {
-      if (current === null) return null
-      const total = current.images.length
-      return { images: current.images, index: (current.index + delta + total) % total }
-    })
+    if (preview === null) return
+    const current = preview
+    const index = (current.index + delta + current.images.length) % current.images.length
+    const version = ++previewVersionRef.current
+    const show = (image?: GeneratedImage): void => {
+      if (version !== previewVersionRef.current) return
+      const images = current.images.slice()
+      if (image !== undefined) images[index] = image
+      setPreview({ ...current, images, index })
+      setPreviewScale(1)
+      setPromptCopied(false)
+    }
+    if (current.refs !== undefined && current.images[index] === undefined) {
+      void historyImagesToGenerated(current.refs.slice(index, index + 1))
+        .then(([image]) => { if (image !== undefined) show(image) })
+        .catch(caught => { if (version === previewVersionRef.current) setError(errorMessage(caught)) })
+    } else show()
   }
 
   // Keyboard navigation for the preview overlay.
@@ -1422,8 +1478,7 @@ export function ImageGenPanel(props: {
   }, [preview, previewScale])
 
   const loadHistoryGroup = async (group: HistoryGroup): Promise<GeneratedImage[]> => {
-    const loaded = await Promise.all(group.entries.map(entry => historyImagesToGenerated(entry.images)))
-    return loaded.flat()
+    return historyImagesToGenerated(group.entries.flatMap(entry => entry.images))
   }
 
   /** View every model result from one comparison as one canvas result set. */
@@ -1479,6 +1534,7 @@ export function ImageGenPanel(props: {
     setExtraReferences([])
     setRefImage(null)
     setImages([])
+    previewVersionRef.current += 1
     setPreview(null)
     setPreviewScale(1)
     setPromptCopied(false)
@@ -1841,7 +1897,7 @@ export function ImageGenPanel(props: {
                 title={tt('preview.open')}
                 onClick={() => { openPreview(item.images, imageIndex) }}
               >
-                <img loading="lazy" className={css.image} src={srcOf(image)} alt={`${group.label} ${imageIndex + 1}`} />
+                <img decoding="async" loading="lazy" className={css.image} src={srcOf(image)} alt={`${group.label} ${imageIndex + 1}`} />
                 <span className={css.ecommerceResultBadge}>{group.label}</span>
                 <span className={css.ecommerceTaskActions} onClick={event => event.stopPropagation()}>
                   <a className={css.ecommerceActionChip} href={srcOf(image)} download={`product-${item.slotKey || item.id}-${imageIndex + 1}.${extensionOf(image.mime)}`}>{tt('download')}</a>
@@ -2001,7 +2057,7 @@ export function ImageGenPanel(props: {
         <div className={css.historyEmpty}>{tt('history.empty')}</div>
       ) : (
         <div className={css.historyList}>
-          {filteredHistory.map(group => {
+          <ProgressiveItems key={`${historyQuery}:${historyModelFilter}:${historyRatioFilter}`} items={filteredHistory} pageSize={20}>{group => {
             const entry = group.entries[0]!
             const isComparison = group.models.length > 1
             const imageCount = group.entries.reduce((total, item) => total + item.images.length, 0)
@@ -2038,9 +2094,8 @@ export function ImageGenPanel(props: {
                     </span>
                   </span>
                 </button>
-                <details className={css.taskDetails}>
-                  <summary>{tt('tasks.details')} · {group.entries.map(item => tt(`tasks.${item.status ?? 'completed'}` as never)).join(' / ')}</summary>
-                  {group.entries.map(item => {
+                <LazyDetails summary={<>{tt('tasks.details')} · {group.entries.map(item => tt(`tasks.${item.status ?? 'completed'}` as never)).join(' / ')}</>}>
+                  {() => group.entries.map(item => {
                     const live = tasks.find(task => task.id === item.taskId)
                     return <div key={item.id} className={css.taskDetailEntry}>
                       <dl className={css.taskInputs}>
@@ -2055,7 +2110,7 @@ export function ImageGenPanel(props: {
                       <p className={css.taskInputPrompt}>{item.prompt}</p>
                       {item.error ? <p className={css.taskError}>{item.error}</p> : null}
                       {(item.references?.length ?? 0) > 0 ? <><strong>{tt('tasks.references')}</strong><div className={css.taskImages}>{item.references!.map((image, index) => <a key={index} href={image.url} target="_blank" rel="noreferrer"><img src={image.url} alt={`${tt('tasks.references')} ${index + 1}`} loading="lazy" /></a>)}</div></> : null}
-                      {item.images.length > 0 ? <><strong>{tt('tasks.results')}</strong><div className={css.taskImages}>{item.images.map((image, index) => <button key={index} type="button" title={`${tt('tasks.results')} ${index + 1}`} onClick={() => { void historyImagesToGenerated(item.images).then(images => { openPreview(images, index) }).catch(caught => { setError(errorMessage(caught)) }) }}><img src={image.url} alt={`${tt('tasks.results')} ${index + 1}`} loading="lazy" /></button>)}</div></> : null}
+                      {item.images.length > 0 ? <><strong>{tt('tasks.results')}</strong><div className={css.taskImages}><ProgressiveItems items={item.images}>{(image, index) => <button key={index} type="button" title={`${tt('tasks.results')} ${index + 1}`} onClick={() => { void openHistoryPreview(item.images, index) }}><img src={image.url} alt={`${tt('tasks.results')} ${index + 1}`} loading="lazy" decoding="async" /></button>}</ProgressiveItems></div></> : null}
                       <div className={css.taskDetailActions}>
                         <button type="button" onClick={() => { void restoreTaskInputs(item) }}>{tt('tasks.restore')}</button>
                         <button type="button" onClick={() => { void copyPreviewPrompt(item.prompt) }}>{tt(promptCopied ? 'preview.copied' : 'preview.copyPrompt')}</button>
@@ -2064,7 +2119,7 @@ export function ImageGenPanel(props: {
                       </div>
                     </div>
                   })}
-                </details>
+                </LazyDetails>
                 <span className={css.historyActions}>
                   {entry.images.length > 0 ? (
                     <button
@@ -2118,7 +2173,7 @@ export function ImageGenPanel(props: {
                 </span>
               </div>
             )
-          })}
+          }}</ProgressiveItems>
         </div>
       )}
     </aside>
@@ -2806,7 +2861,7 @@ export function ImageGenPanel(props: {
                 <div className={css.historyEmpty}>{tt('gallery.empty')}</div>
               ) : (
                 <div className={css.galleryMasonry} data-view={galleryView}>
-                  {filteredGallery.map(entry => {
+                  <ProgressiveItems key={`${galleryFilter}:${galleryRatio}:${galleryQuery}:${gallerySort}:${galleryTagFilter}`} items={filteredGallery}>{entry => {
                     const image = entry.images[0]
                     if (image === undefined) return null
                     return (
@@ -2862,7 +2917,7 @@ export function ImageGenPanel(props: {
                         ) : null}
                       </article>
                     )
-                  })}
+                  }}</ProgressiveItems>
                 </div>
               )}
             </div>
@@ -3027,7 +3082,7 @@ export function ImageGenPanel(props: {
                 ) : null}
               </div>
               <div className={css.grid} data-count={images.length} data-many={images.length > 4 ? 'true' : undefined}>
-                {images.map((image, index) => (
+                <ProgressiveItems key={viewingHistoryId ?? String(images[0]?.b64.slice(-64))} items={images}>{(image, index) => (
                   <figure
                     key={index}
                     className={css.imageCard}
@@ -3044,6 +3099,7 @@ export function ImageGenPanel(props: {
                   >
                     <img
                       loading="lazy"
+                      decoding="async"
                       className={css.image}
                       src={srcOf(image)}
                       alt={image.revisedPrompt ?? `${tt('panel.title')} ${index + 1}`}
@@ -3086,7 +3142,7 @@ export function ImageGenPanel(props: {
                       {tt('download')}
                     </a>
                   </figure>
-                ))}
+                )}</ProgressiveItems>
               </div>
             </div>
           ) : null}

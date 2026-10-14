@@ -3699,6 +3699,8 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
   const previewRequests = []
   /** Every fetch path the client issued (debug aid for the canvas tools). */
   const requestPaths = []
+  let historyReads = 0
+  let peakHistoryReads = 0
   const canvasDocument = {
     version: 2,
     id: 'canvas-smoke',
@@ -3773,7 +3775,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
         json: async () => ({
           ok: true,
           entries: [
-            { id: 'history-grok', createdAt: 2, mode: 'text', model: 'grok-imagine-image', prompt: 'compare prompt', size: '1:1', quality: '4k', detail: '', n: 1, images: [{ url: '/history/grok.png', mime: 'image/png' }], ...comparisonHistory },
+            { id: 'history-grok', createdAt: 2, mode: 'text', model: 'grok-imagine-image', prompt: 'compare prompt', size: '1:1', quality: '4k', detail: '', n: 100, images: Array.from({ length: 100 }, (_, index) => ({ url: `/history/grok-${index}.png`, mime: 'image/png' })), ...comparisonHistory },
             { id: 'history-gpt', createdAt: 1, mode: 'text', model: 'gpt-image-2', prompt: 'compare prompt', size: '1:1', quality: '4k', detail: '', n: 1, images: [{ url: '/history/gpt.png', mime: 'image/png' }], ...comparisonHistory },
             { id: 'hist-ecom-1', createdAt: 4, mode: 'text', model: 'gpt-image-2', prompt: 'product main image', size: '1:1', quality: '2k', detail: '', n: 1, images: [{ url: '/history/ecom1.png', mime: 'image/png' }], workflow: 'ecommerce', projectId: 'project-hist', projectName: '历史保温杯', slotKey: 'main-1', slotLabel: '主图' },
             { id: 'hist-ecom-2', createdAt: 5, mode: 'text', model: 'gpt-image-2', prompt: 'product selling point', size: '1:1', quality: '2k', detail: '', n: 1, images: [{ url: '/history/ecom2.png', mime: 'image/png' }], workflow: 'ecommerce', projectId: 'project-hist', projectName: '历史保温杯', slotKey: 'sp-1', slotLabel: '卖点图' },
@@ -3856,7 +3858,13 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     if (path.startsWith('/history/')) {
       return {
         ok: true,
-        blob: async () => new jsdomWindow.Blob([pngBytes], { type: 'image/png' }),
+        blob: async () => {
+          historyReads++
+          peakHistoryReads = Math.max(peakHistoryReads, historyReads)
+          await new Promise(resolve => setTimeout(resolve, 1))
+          historyReads--
+          return new jsdomWindow.Blob([pngBytes], { type: 'image/png' })
+        },
       }
     }
     if (path.startsWith('/api/dsh-imagegen/gallery/image/')) {
@@ -4142,12 +4150,37 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.ok(taskSidebar.textContent.includes('任务列表'), 'history is the unified task list')
     assert.equal(view.querySelector('[class*="taskTray"]'), null, 'no duplicate task tray remains')
     const comparisonDetails = taskSidebar.querySelector('[data-comparison] details')
+    assert.equal(comparisonDetails.querySelectorAll('img').length, 0, 'closed 100-image task mounts no detail images')
+    comparisonDetails.open = true
+    comparisonDetails.dispatchEvent(new jsdomWindow.Event('toggle'))
+    await new Promise(resolve => setTimeout(resolve, 30))
     assert.ok(comparisonDetails.textContent.includes('请求 / 实际张数'), 'task details include requested and actual counts')
-    assert.equal(comparisonDetails.querySelectorAll('img').length, 2, 'task details show every grouped result')
+    assert.equal(comparisonDetails.querySelectorAll('img').length, 25, '100-image task initially mounts 24 results plus the other model')
+    comparisonDetails.querySelector('[data-imagegen-load-more]').click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(comparisonDetails.querySelectorAll('img').length, 49, 'next batch is accessible without mounting all 100 images')
+    const beforePreviewRequests = requestPaths.filter(path => path.startsWith('/history/')).length
+    comparisonDetails.querySelector('button[title="结果图片 1"]').click()
+    await waitForSelector(jsdomDocument, '[class*="lightbox"]')
+    assert.equal(requestPaths.filter(path => path.startsWith('/history/')).length - beforePreviewRequests, 1, 'opening a 100-image task preview fetches only the selected original')
+    jsdomDocument.querySelector('[data-dir="next"]').click()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(requestPaths.filter(path => path.startsWith('/history/')).length - beforePreviewRequests, 2, 'next image is fetched only on navigation')
+    jsdomDocument.querySelector('[data-dir="prev"]').click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(requestPaths.filter(path => path.startsWith('/history/')).length - beforePreviewRequests, 2, 'returning to a loaded preview reuses its image')
+
+    jsdomWindow.dispatchEvent(new jsdomWindow.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 30))
     ;[...comparisonDetails.querySelectorAll('button')].find(button => button.textContent === '回填输入').click()
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.equal(view.querySelector('textarea[placeholder*="描述你想要的画面"]')?.value, 'compare prompt', 'restore fills the saved prompt')
     assert.ok([...comparisonDetails.querySelectorAll('button')].some(button => button.textContent.includes('复制提示词')), 'copy prompt is available per task')
+    comparisonDetails.open = false
+    comparisonDetails.dispatchEvent(new jsdomWindow.Event('toggle'))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(comparisonDetails.querySelectorAll('img').length, 0, 'closing details unmounts its image cards')
+
 
     assert.ok(jsdomDocument.querySelector('[data-history-new]') !== null, 'new creation button rendered beside history clear')
     assert.ok(jsdomDocument.querySelector('[data-history-clear]') !== null, 'history clear button rendered')
@@ -4338,6 +4371,12 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.ok(galleryHistoryMain !== null, 'gallery mode exposes clickable history')
     galleryHistoryMain.click()
     await waitForSelector(view, '[data-count]')
+    assert.ok(peakHistoryReads <= 4, 'history loading never reads more than four originals concurrently')
+    assert.equal(view.querySelector('[data-count]').getAttribute('data-count'), '101', 'all result metadata remains available')
+    assert.equal(view.querySelectorAll('[data-count] figure').length, 24, 'large result canvas initially mounts 24 cards')
+    view.querySelector('[data-count] [data-imagegen-load-more]').click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(view.querySelectorAll('[data-count] figure').length, 48, 'next result batch remains accessible')
     assert.equal(view.querySelectorAll('[data-gallery="true"]').length, 0, 'history click returns to text-to-image')
     assert.ok(view.querySelector('textarea[placeholder*="描述你想要的画面"]') !== null, 'normal prompt returns after gallery')
     assert.ok(view.querySelector('[class*="generateButton"]') !== null, 'normal generate button returns after gallery')
