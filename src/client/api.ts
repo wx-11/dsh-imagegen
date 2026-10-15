@@ -132,6 +132,11 @@ export class ImageGenApi {
     return (await readEnvelope<{ ok: true; task: GenerationTask }>(response)).task
   }
 
+  async taskRemove(id: string): Promise<void> {
+    const response = await fetch(TASK_API.remove, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) })
+    await readEnvelope<{ ok: true }>(response)
+  }
+
   /**
    * The retained record of upstream attempts (#38). Read after a failure to
    * see which address was called, what came back, and how long it took.

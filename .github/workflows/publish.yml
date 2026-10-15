@@ -37,10 +37,21 @@ jobs:
 
       - name: Validate package metadata
         run: |
-          test "$(node -p "require('./package.json').name")" = "@superdsh/dsh-imagegen"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
-          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const { name, version } = JSON.parse(readFileSync('package.json', 'utf8'))
+          const { GITHUB_REF_TYPE: refType, GITHUB_REF_NAME: refName } = process.env
+          console.log(`Package: ${name}@${version}; ref: ${refType}/${refName}`)
+          if (name !== '@superdsh/dsh-imagegen') {
+            console.error(`::error::Package name mismatch: expected @superdsh/dsh-imagegen, got ${name}`)
+            process.exit(1)
+          }
+          if (refType === 'tag' && version !== refName?.replace(/^v/, '')) {
+            console.error(`::error::Release tag ${refName} does not match package.json version ${version}. Expected tag: v${version}.`)
+            process.exit(1)
+          }
+          console.log('Package metadata OK')
+          NODE
 
       - name: Typecheck
         run: pnpm typecheck

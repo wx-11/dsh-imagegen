@@ -903,6 +903,18 @@ export function makeRoutes(deps: ImageGenRoutesDeps): WebRoute[] {
         writeJson(res, 200, { ok: true, task })
       },
     },
+    {
+      kind: 'exact', path: TASK_API.remove,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = typeof body?.id === 'string' ? body.id : ''
+        if (id === '') { writeJson(res, 200, { ok: false, code: 'bad-request', message: 'task id is required' }); return }
+        const removed = runtime.queue.remove(id)
+        if (!removed) { writeJson(res, 200, { ok: false, code: 'task-not-terminal', message: 'only finished tasks can be removed' }); return }
+        writeJson(res, 200, { ok: true })
+      },
+    },
     // ----------------------------------------------- update check
     {
       kind: 'exact',

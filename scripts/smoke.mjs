@@ -4428,7 +4428,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.ok(jsdomDocument.querySelector('[data-history-clear]') !== null, 'history clear button rendered')
     jsdomDocument.querySelector('[data-history-clear]')?.dispatchEvent(new jsdomWindow.MouseEvent('click', { bubbles: true }))
     await new Promise(resolve => setTimeout(resolve, 20))
-    assert.equal(confirmationCalls, 1, 'history clear asks for confirmation')
+    assert.equal(confirmationCalls, 2, 'history clear asks for two confirmations')
     // The panel header rendered.
     assert.ok(jsdomDocument.querySelector('[data-dsh-imagegen-view] h2') !== null, 'panel header rendered')
     const connectionStatus = jsdomDocument.querySelector('[data-dsh-imagegen-view] [data-connected]')
@@ -4659,7 +4659,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.ok(view.querySelector('[data-gallery-clear]') !== null, 'gallery clear button rendered')
     view.querySelector('[data-gallery-clear]')?.dispatchEvent(new jsdomWindow.MouseEvent('click', { bubbles: true }))
     await new Promise(resolve => setTimeout(resolve, 20))
-    assert.equal(confirmationCalls, 2, 'gallery clear asks for confirmation')
+    assert.equal(confirmationCalls, 3, 'gallery clear follows the prior two-step history confirmation')
     // The configuration entry registers exactly one Settings navigation section.
     const sectionRegistrations = registered.filter(item => item.name === 'settings.section')
     assert.equal(sectionRegistrations.length, 1)

@@ -115,6 +115,7 @@ export const TASK_API = {
   get: '/api/dsh-imagegen/tasks/get',
   cancel: '/api/dsh-imagegen/tasks/cancel',
   retry: '/api/dsh-imagegen/tasks/retry',
+  remove: '/api/dsh-imagegen/tasks/remove',
 } as const
 
 /** Reveal the host data directory (saved images) in the OS file manager. */

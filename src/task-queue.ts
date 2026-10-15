@@ -38,6 +38,16 @@ export class GenerationTaskQueue {
     return task === undefined ? undefined : this.snapshot(task)
   }
 
+  /** Forget a terminal task, never interrupt an active generation. */
+  remove(id: string): boolean {
+    const index = this.tasks.findIndex(task => task.id === id)
+    if (index < 0) return false
+    const task = this.tasks[index]!
+    if (task.status === 'queued' || task.status === 'running' || this.controllers.has(id)) return false
+    this.tasks.splice(index, 1)
+    return true
+  }
+
   /** Observe queue state changes. Listener failures never disrupt generation. */
   subscribe(listener: GenerationTaskListener): () => void {
     this.listeners.add(listener)

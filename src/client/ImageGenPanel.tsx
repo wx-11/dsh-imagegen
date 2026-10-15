@@ -1511,6 +1511,7 @@ export function ImageGenPanel(props: {
 
   /** Remove every persisted row belonging to one comparison group. */
   const deleteHistoryGroup = async (group: HistoryGroup): Promise<void> => {
+    if (!window.confirm(tt('history.deleteConfirm'))) return
     historyRevisionRef.current += 1
     for (const entry of group.entries) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.add(entry.taskId)
     const ids = new Set(group.entries.map(entry => entry.id))
@@ -1524,6 +1525,10 @@ export function ImageGenPanel(props: {
     try {
       let next = history
       for (const id of ids) next = await api.historyRemove(id)
+      for (const taskId of new Set(group.entries.map(entry => entry.taskId).filter((id): id is string => id !== undefined))) {
+        await api.taskRemove(taskId).catch(() => { /* task may already be gone */ })
+      }
+      setTasks(previous => previous.filter(task => !group.entries.some(entry => entry.taskId === task.id)))
       setHistory(next)
     } catch (caught) {
       for (const entry of group.entries) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.delete(entry.taskId)
@@ -1556,13 +1561,19 @@ export function ImageGenPanel(props: {
 
   /** Remove all history entries. */
   const clearHistory = async (): Promise<void> => {
-    if (!window.confirm(tt('history.clearConfirm'))) return
+    const firstConfirmation = window.confirm(tt('history.clearConfirm'))
+    const secondConfirmation = window.confirm(tt('history.clearConfirmAgain'))
+    if (!firstConfirmation || !secondConfirmation) return
     historyRevisionRef.current += 1
     for (const entry of history) if (entry.taskId !== undefined) dismissedTaskIdsRef.current.add(entry.taskId)
     setHistory([])
     setViewingHistoryId(null)
     try {
       setHistory(await api.historyClear())
+      for (const taskId of new Set(history.map(entry => entry.taskId).filter((id): id is string => id !== undefined))) {
+        await api.taskRemove(taskId).catch(() => { /* task may already be gone */ })
+      }
+      setTasks(previous => previous.filter(task => !history.some(entry => entry.taskId === task.id)))
     } catch (caught) {
       dismissedTaskIdsRef.current.clear()
       setError(errorMessage(caught))
@@ -2169,7 +2180,6 @@ export function ImageGenPanel(props: {
                     type="button"
                     className={css.historyIconAction}
                     data-danger
-                    disabled={group.entries.some(item => !history.some(record => record.id === item.id))}
                     title={tt('history.delete')}
                     aria-label={tt('history.delete')}
                     onClick={() => { void deleteHistoryGroup(group) }}
