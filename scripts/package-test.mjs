@@ -8,7 +8,16 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 await mkdir(path.join(root, 'artifacts'), { recursive: true })
 const directory = await mkdtemp(path.join(root, 'artifacts/package-test-'))
 try {
-  const [packed] = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], { cwd: root, encoding: 'utf8' }))
+  const packOutput = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], { cwd: root, encoding: 'utf8' })
+  // npm 10/11 may print lifecycle/prepare logs before the JSON payload.
+  let packed
+  for (let offset = packOutput.indexOf('['); offset >= 0; offset = packOutput.indexOf('[', offset + 1)) {
+    try {
+      const candidate = JSON.parse(packOutput.slice(offset))
+      if (Array.isArray(candidate) && candidate[0]?.files !== undefined) { packed = candidate[0]; break }
+    } catch { /* npm lifecycle output can contain bracketed log text */ }
+  }
+  assert.ok(packed !== undefined, `npm pack did not return JSON: ${packOutput.slice(-500)}`)
   const files = packed.files.map(file => file.path)
   assert.ok(files.includes('lib/index.js') && files.includes('lib/client.js'))
   assert.ok(files.includes('cordis.patch.yml'))
