@@ -2027,6 +2027,7 @@ export function ImageGenPanel(props: {
             onClick={startNewCreation}
           >
             <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+            <span>{tt('canvas.new')}</span>
           </button>
           <button
             type="button"
@@ -2191,11 +2192,11 @@ export function ImageGenPanel(props: {
     <div className={css.panel}>
       <header className={css.panelHeader}>
         <span className={css.panelHeading}>
-          <button type="button" className={css.chatToggle} onClick={() => { if (workspace !== 'normal' || tab !== 'text') openTab('text'); else props.onBack?.() }}>← {tt('navigation.back')}</button>
+          <button type="button" className={css.chatToggle} onClick={startNewCreation}>← {tt('navigation.back')}</button>
           <h2 className={css.panelTitle}>{tt('panel.title')}</h2>
           <a
             className={css.githubLink}
-            href="https://github.com/dickpy/dsh-imagegen"
+            href="https://github.com/wx-11/dsh-imagegen"
             target="_blank"
             rel="noreferrer"
             title={tt('panel.githubTip')}
@@ -3016,7 +3017,6 @@ export function ImageGenPanel(props: {
               )}
             </div>
           ) : null}
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
           {workspace === 'normal' && tab !== 'gallery' && comparison !== null ? (
             <section className={css.comparisonBoard} aria-label={tt('compare.title')}>
               <header><div><strong>{tt('compare.title')}</strong><span>{comparisonResults.length} / {comparisonTasks.length}{generating ? ` · ${tt('canvas.elapsed', { seconds: elapsed })}` : ''}</span></div><button type="button" disabled={comparisonResults.length === 0} onClick={() => { setComparisonFullscreen(true) }}>{tt('compare.fullscreen')}</button></header>
@@ -3115,10 +3115,6 @@ export function ImageGenPanel(props: {
                         {tt('revisedPrompt', { prompt: image.revisedPrompt })}
                       </figcaption>
                     ) : null}
-                    <span className={css.zoomHint}>
-                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M13 13l-3.2-3.2"/><path d="M7 5.4v3.2M5.4 7h3.2"/></svg>
-                      {tt('preview.open')}
-                    </span>
                       <button
                         type="button"
                         className={css.galleryAdd}

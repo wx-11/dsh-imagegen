@@ -4364,7 +4364,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     const view = jsdomDocument.querySelector('[data-dsh-imagegen-view]')
     assert.ok(view !== null, 'studio view container was mounted')
     assert.ok(view.isConnected, 'view container attached to the center column')
-    assert.ok([...view.querySelectorAll('button')].some(button => button.textContent.trim() === '← 返回'), 'visible studio back button')
+    assert.ok([...view.querySelectorAll('button')].some(button => button.textContent.trim() === '← 回到生图首页'), 'visible studio home button')
     assert.ok(view.textContent.includes('100 张'), '100-image preset is available')
     assert.ok(view.textContent.includes('4:5'), 'expanded aspect ratios are available')
     assert.equal(view.textContent.includes('清晰度'), false, 'clarity controls are removed')
@@ -4524,10 +4524,10 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.equal(nativeNewSessionCalls, 0, 'returning to the current conversation never starts a new session')
     jsdomDocument.querySelector('[data-dsh-imagegen-tab="image"]').click()
     await new Promise(resolve => setTimeout(resolve, 20))
-    const backButton = [...view.querySelectorAll('button')].find(button => button.textContent.trim() === '← 返回')
+    const backButton = [...view.querySelectorAll('button')].find(button => button.textContent.trim() === '← 回到生图首页')
     backButton.click()
     await new Promise(resolve => setTimeout(resolve, 20))
-    assert.equal(jsdomDocument.documentElement.hasAttribute('data-dsh-imagegen-active'), false, 'studio back button returns to conversation')
+    assert.equal(jsdomDocument.documentElement.hasAttribute('data-dsh-imagegen-active'), true, 'studio home button stays in image studio')
     assert.equal(nativeNewSessionCalls, 0, 'back button preserves the current session')
 
 

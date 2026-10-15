@@ -158,7 +158,7 @@ node scripts/smoke.mjs
 
 ```bash
 pnpm pack --pack-destination .
-dsh plugin --profile web add ./dickpy-dsh-imagegen-<版本>.tgz
+dsh plugin --profile web add ./superdsh-dsh-imagegen-<版本>.tgz
 ```
 
 </details>
