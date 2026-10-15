@@ -13,6 +13,7 @@ try {
   assert.ok(files.includes('lib/index.js') && files.includes('lib/client.js'))
   assert.ok(files.includes('cordis.patch.yml'))
   assert.equal(files.some(file => file.startsWith('src/') || file.startsWith('docs/') || /\.(?:map|tsx?|css)$/.test(file)), false, 'package contains no sources or source maps')
+  assert.equal(files.some(file => file.startsWith('scripts/') || file.startsWith('artifacts/')), false, 'package contains no repository tooling')
   execFileSync('tar', ['-xzf', path.join(directory, packed.filename), '-C', directory])
   const home = path.join(directory, 'data')
   process.env.DSH_HOME = home

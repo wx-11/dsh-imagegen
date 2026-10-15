@@ -1,0 +1,11 @@
+# npm package contains only the allow-listed build output from package.json.
+src/
+docs/
+scripts/
+artifacts/
+*.map
+*.ts
+*.tsx
+*.css
+tsconfig.json
+tsdown.config.ts
