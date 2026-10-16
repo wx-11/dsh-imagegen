@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>图片标注器</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">+</span><span>图片标注器</span></div>
+      <div class="actions">
+        <label class="button secondary">导入图片<input id="fileInput" type="file" accept="image/*" hidden></label>
+        <button class="button primary" id="exportButton">导出 PNG</button>
+      </div>
+    </header>
+    <section class="workspace">
+      <aside class="toolbar" aria-label="工具栏">
+        <button class="tool active" data-tool="select" title="选择和移动">↖<span>选择</span></button>
+        <button class="tool" data-tool="pen" title="画笔">✎<span>画笔</span></button>
+        <button class="tool" data-tool="eraser" title="橡皮擦">⌫<span>橡皮</span></button>
+        <button class="tool" data-tool="rect" title="矩形">□<span>矩形</span></button>
+        <button class="tool" data-tool="text" title="文字">T<span>文字</span></button>
+        <div class="tool-separator"></div>
+        <button class="icon-button" id="undoButton" title="撤销" disabled>↶</button>
+        <button class="icon-button" id="redoButton" title="重做" disabled>↷</button>
+        <label class="color-control" title="标注颜色"><input id="colorInput" type="color" value="#ef4444"><span>颜色</span></label>
+        <label class="size-control" title="笔刷大小"><span>粗细</span><input id="sizeInput" type="range" min="1" max="80" value="8"><output id="sizeOutput">8</output></label>
+        <button class="icon-button" id="clearButton" title="清空标注">⌫</button>
+      </aside>
+      <section class="canvas-area">
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="canvas" role="application" aria-label="图片标注画布"></canvas>
+          <div class="empty-state" id="emptyState"><div class="empty-icon">⌁</div><strong>导入一张图片开始标注</strong><span>支持 PNG、JPEG、WebP</span></div>
+        </div>
+        <div class="statusbar"><span id="statusText">未加载图片</span><span id="zoomText">100%</span></div>
+      </section>
+      <aside class="inspector">
+        <h2>属性</h2>
+        <div id="selectionInfo" class="muted">选择一个标注对象</div>
+        <div class="inspector-row"><span>对象数量</span><strong id="objectCount">0</strong></div>
+        <div class="inspector-row"><span>画布尺寸</span><strong id="dimensions">-</strong></div>
+        <p class="hint">画笔和橡皮擦按住拖动；选择工具可移动标注。双击文字可重新输入。</p>
+      </aside>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

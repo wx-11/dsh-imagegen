@@ -96,7 +96,7 @@ export class ImageGenerationRuntime {
       model: request.model,
       prompt: request.prompt,
       size: request.size,
-      quality: 'auto',
+      quality: request.quality ?? 'auto',
       detail: '',
       n: request.n,
       images,

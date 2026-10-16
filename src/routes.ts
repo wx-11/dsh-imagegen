@@ -331,8 +331,10 @@ function parseGenerateRequest(body: Record<string, unknown>): GenerateRequest | 
     model: typeof body.model === 'string' ? body.model : '',
     prompt,
     size: typeof body.size === 'string' ? body.size : 'auto',
+    ...typeof body.quality === 'string' && body.quality !== '' ? { quality: body.quality } : {},
     n: normalizeImageCount(typeof body.n === 'number' ? body.n : 1),
     ...typeof body.image === 'string' && body.image !== '' ? { image: body.image } : {},
+    ...typeof body.mask === 'string' && body.mask !== '' ? { mask: body.mask } : {},
     ...Array.isArray(body.images)
       ? { images: body.images.filter((item): item is string => typeof item === 'string' && item !== '').slice(0, 7) }
       : {},

@@ -329,14 +329,18 @@ function clampCount(n: number): number {
 }
 
 /** Pick the effective per-model request parameters. */
-function effectiveParams(request: GenerateRequest): {
+function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
   model: string
   n?: number
   size?: string
+  quality?: string
   aspect_ratio?: string
   response_format?: string
 } {
   const model = wireModel(request)
+  const yeahzi = upstream !== undefined && (() => {
+    try { return new URL(upstream.apiUrl).hostname.toLowerCase() === 'api.closeai.hk' } catch { return false }
+  })()
   // dall-e-3 has no quality/detail knobs and only produces one image.
   if (model === 'dall-e-3') {
     const pixel = OPENAI_SIZE_BY_RATIO[request.size]
@@ -374,6 +378,16 @@ function effectiveParams(request: GenerateRequest): {
       response_format: isVolcSeedream(model) ? 'url' : 'b64_json',
     }
   }
+  if (yeahzi) {
+    return {
+      model,
+      n: clampCount(request.n),
+      ...request.size !== '' && request.size !== 'auto' ? { size: request.size } : {},
+      ...request.quality !== undefined && ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(request.quality)
+        ? { quality: request.quality }
+        : {},
+    }
+  }
   // Zhipu accepts OpenAI-style custom pixel sizes.
   if (isZhipuImage(model)) {
     return {
@@ -387,8 +401,8 @@ function effectiveParams(request: GenerateRequest): {
   return {
     model,
     n: clampCount(request.n),
-    ...request.size !== '' && request.size !== 'auto' && OPENAI_SIZE_BY_RATIO[request.size] !== undefined
-      ? { size: OPENAI_SIZE_BY_RATIO[request.size] }
+    ...request.size !== '' && request.size !== 'auto' && (OPENAI_SIZE_BY_RATIO[request.size] !== undefined || /^\d+x\d+$/.test(request.size))
+      ? { size: OPENAI_SIZE_BY_RATIO[request.size] ?? request.size }
       : {},
   }
 }
@@ -916,7 +930,12 @@ async function requestOneImage(
       form.append('prompt', request.prompt)
       form.append('model', params.model)
       if (params.size !== undefined) form.append('size', params.size)
+      if (params.quality !== undefined) form.append('quality', params.quality)
       if (params.n !== undefined) form.append('n', String(params.n))
+      if (typeof request.mask === 'string' && request.mask !== '') {
+        const mask = decodeReference(request.mask)
+        form.append('mask', new Blob([mask.bytes], { type: mask.mime }), `mask.${extensionOf(mask.mime)}`)
+      }
       body = form
     }
   } else {
@@ -1429,7 +1448,7 @@ export async function generateImage(upstream: UpstreamConfig, request: GenerateR
       throw new ImageGenError('智谱 GLM-Image 当前仅支持文生图，请切换到文生图模式或选择支持图生图的模型', 'edit-unsupported')
     }
   }
-  const params = effectiveParams(request)
+  const params = effectiveParams(request, upstream)
   if (isModelScopeInference(baseUrl)) delete params.n
   if (params.n !== undefined || /\/videos\/?$/i.test(new URL(baseUrl).pathname)) {
     return { images: await requestOneImage(baseUrl, upstream, request, params, options.signal) }

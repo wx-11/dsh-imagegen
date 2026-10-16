@@ -969,6 +969,8 @@ export interface GenerateRequest extends EcommerceTaskMeta {
    *  and Nano Banana, resolution-tier size for Seedream, the closest pixel size for
    *  OpenAI-compatible endpoints). */
   size: string
+  /** Optional upstream quality tier (currently forwarded by Yeahzi channels). */
+  quality?: string
   /** Number of images, 1–100. */
   n: number
   /** Reference image as a data URL (edit mode only). */
@@ -977,6 +979,8 @@ export interface GenerateRequest extends EcommerceTaskMeta {
    *  image stays in `image`; providers that accept several references get them
    *  all, single-reference providers see `image` alone. */
   images?: string[]
+  /** Optional transparent-area edit mask (PNG data URL; edit mode only). */
+  mask?: string
   /** Original reference-image name, retained in the history entry. */
   refName?: string
   /** Channel this request targets (the host falls back to the default when

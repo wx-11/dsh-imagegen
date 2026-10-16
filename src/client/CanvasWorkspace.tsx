@@ -23,6 +23,7 @@ import type { ImageModelGroup } from './settings-scope.ts'
 import { CanvasFileBody, CanvasFileOverlay, fileKindLabel, fileKindOfAsset, fileSizeLabel } from './CanvasFilePreview.tsx'
 import { DotFieldBackground, DotGridBackground, FaultyTerminalBackground, FloatingLinesBackground, FlowBackground, GalaxyBackground, LiquidEtherBackground, ShapeGridBackground, SilkBackground, WavesBackground } from './CanvasBackgrounds.tsx'
 import { Select } from './Select.tsx'
+import { ImageEditOverlay, type ImageEditSubmission } from './ImageEditOverlay.tsx'
 import css from './canvas-workspace.module.css'
 
 type CanvasTool = 'select' | 'pan'
@@ -186,7 +187,7 @@ function sizeForAsset(asset: CanvasAssetRef): { width: number; height: number } 
 
 /** Node footprint for a generation size ratio such as '1:1' or '16:9'. */
 function nodeSizeFromRatio(size: string | undefined, spec: { width: number; height: number }): { width: number; height: number } {
-  const match = /^(\d+):(\d+)$/.exec(size ?? '')
+  const match = /^(\d+)[:x](\d+)$/.exec(size ?? '')
   if (match === null) return { ...spec }
   const width = Number(match[1])
   const height = Number(match[2])
@@ -449,7 +450,7 @@ function rasterizeSketch(strokes: CanvasSketchStroke[], boardWidth: number, boar
   return { dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }
 }
 
-type ToolbarIconName = 'new' | 'select' | 'pan' | 'image' | 'text' | 'file' | 'sketch' | 'eraser' | 'trash' | 'undo' | 'redo' | 'fit' | 'minimap' | 'background' | 'template' | 'download' | 'duplicate' | 'sparkle' | 'send' | 'close' | 'deleteProject' | 'annotate' | 'removeBg' | 'layers' | 'bold' | 'color' | 'skill' | 'upload' | 'expand' | 'favorite' | 'favoriteFilled'
+type ToolbarIconName = 'new' | 'select' | 'pan' | 'image' | 'text' | 'file' | 'sketch' | 'eraser' | 'trash' | 'undo' | 'redo' | 'fit' | 'minimap' | 'background' | 'template' | 'download' | 'duplicate' | 'sparkle' | 'send' | 'close' | 'deleteProject' | 'annotate' | 'removeBg' | 'layers' | 'bold' | 'color' | 'skill' | 'upload' | 'expand' | 'favorite' | 'favoriteFilled' | 'edit'
 
 /** Lucide icons (stroke matches the DSH line style); one shared component so
  *  every dock/toolbar icon comes from the same well-drawn set. */
@@ -460,6 +461,7 @@ function ToolbarIcon({ name, size = 16 }: { name: ToolbarIconName; size?: number
     case 'select': return <MousePointer2 {...common} />
     case 'pan': return <Hand {...common} />
     case 'image': return <ImageIcon {...common} />
+    case 'edit': return <Pencil {...common} />
     case 'text': return <Type {...common} />
     case 'file': return <FileTextIcon {...common} />
     case 'sketch': return <Pencil {...common} />
@@ -1188,6 +1190,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
   const [fileTargetNodeId, setFileTargetNodeId] = useState<string | null>(null)
   /** File node whose full-screen preview reader is open (null = closed). */
   const [filePreviewNodeId, setFilePreviewNodeId] = useState<string | null>(null)
+  const [editImageNodeId, setEditImageNodeId] = useState<string | null>(null)
   const [skillMenu, setSkillMenu] = useState<{ screen: Point; nodeId: string } | null>(null)
   const [skillCatalog, setSkillCatalog] = useState<{ skills: CanvasSkillDescriptor[]; installed: string[]; reason?: string } | null>(null)
   const [skillCatalogLoading, setSkillCatalogLoading] = useState(false)
@@ -2717,6 +2720,40 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
     }
   }, [annotatedReference, api, channelIsConnected, defaultChannelId, modelGroups, onOpenSettings, patchNode, upstreamNodes])
 
+  const submitImageEdit = useCallback(async (source: CanvasNode, submission: ImageEditSubmission): Promise<void> => {
+    const current = documentRef.current
+    const asset = usableAsset(source)
+    if (current === null || asset === undefined) throw new Error(tt('canvas.emptyImageNode'))
+    if (!channelIsConnected(submission.channelId)) throw new Error(tt('canvas.needApi'))
+    const image = await assetToDataUrl(asset)
+    const request: GenerateRequest = {
+      mode: 'edit', model: submission.model, channelId: submission.channelId,
+      prompt: submission.prompt, size: submission.size, quality: submission.quality,
+      n: 1, image, mask: submission.mask, refName: 'canvas-mask-edit.png',
+      canvas: { canvasId: current.id, sourceNodeId: source.id, parentNodeId: source.id, placement: 'right' },
+    }
+    const task = await api.taskSubmit(request)
+    localTaskIds.current.add(task.id)
+    const footprint = nodeSizeFromRatio(submission.size, IMAGE_NODE_SIZE)
+    const node: CanvasNode = {
+      id: newId('node'), type: 'image', title: tt('canvas.imageNode'),
+      x: Math.round(source.x + source.width + 80), y: Math.round(source.y),
+      width: footprint.width, height: footprint.height,
+      metadata: {
+        status: 'generating', taskId: task.id, sourceNodeId: source.id,
+        prompt: submission.prompt, model: submission.model, channelId: submission.channelId,
+        size: submission.size, quality: submission.quality,
+      },
+    }
+    mutate(previous => ({
+      ...previous,
+      nodes: [...previous.nodes, node],
+      connections: [...previous.connections, { id: newId('edge'), fromNodeId: source.id, toNodeId: node.id }],
+    }))
+    setEditImageNodeId(null)
+    setError(null)
+  }, [api, channelIsConnected, mutate])
+
   // Orphan reconciliation: a generating placeholder whose task no longer exists
   // in the host feed (e.g. the host restarted) can never complete on its own.
   useEffect(() => {
@@ -3723,6 +3760,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
             />
           </>}      <div className={`${css.hoverToolbar} ${node.type === 'image' && hasImage ? css.hoverToolbarBottom : ''}`} data-toolbar={node.type === 'image' && hasImage ? 'bottom' : 'top'} onPointerDown={event => event.stopPropagation()}>
         {node.type === 'image' && hasImage ? <>
+          <IconButton name="edit" label={tt('canvas.editImage')} disabled={busyLabel !== undefined} onClick={() => setEditImageNodeId(node.id)} />
           <IconButton name="annotate" label={tt('canvas.annotate')} active={annotating} onClick={() => toggleAnnotate(node)} />
           <IconButton name="removeBg" label={tt('canvas.removeBackground')} disabled={busyLabel !== undefined} onClick={() => { void removeNodeBackground(node) }} />
           <IconButton name="layers" label={tt('canvas.splitLayers')} disabled={busyLabel !== undefined} onClick={() => { void splitLayers(node) }} />
@@ -4409,6 +4447,23 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
       title={filePreviewNode.node.title}
       onClose={() => setFilePreviewNodeId(null)}
     /> : null}
+    {editImageNodeId !== null && nodeById.get(editImageNodeId) !== undefined && usableAsset(nodeById.get(editImageNodeId)!) !== undefined ? (() => {
+      const node = nodeById.get(editImageNodeId)!
+      const asset = usableAsset(node)!
+      return <ImageEditOverlay
+        imageUrl={asset.url}
+        imageWidth={asset.width}
+        imageHeight={asset.height}
+        modelGroups={modelGroups}
+        defaultChannelId={defaultChannelId}
+        connected={connected}
+        connectedChannelIds={connectedChannelIds}
+        initialModel={nodeMetadata(node).model}
+        initialChannelId={nodeMetadata(node).channelId}
+        onClose={() => setEditImageNodeId(null)}
+        onSubmit={submission => submitImageEdit(node, submission)}
+      />
+    })() : null}
     {libraryOpen ? <TemplateLibrary api={api} onClose={() => setLibraryOpen(false)} onUse={prompt => { applyTemplate(prompt); setLibraryOpen(false) }} /> : null}
     {skillLibraryOpen ? <SkillLibraryDialog
       library={skillLibrary}

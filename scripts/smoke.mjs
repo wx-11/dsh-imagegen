@@ -564,6 +564,39 @@ await check('B3b edit mode forwards every reference image', async () => {
   }
 })
 
+await check('B3c Yeahzi image edits preserve ratio, quality, and transparent mask', async () => {
+  const originalFetch = globalThis.fetch
+  let receivedUrl = ''
+  let receivedFields = new Map()
+  globalThis.fetch = async (input, init) => {
+    receivedUrl = String(input)
+    const body = init?.body
+    if (body instanceof FormData) receivedFields = new Map(body.entries())
+    return new Response(JSON.stringify({ data: [{ b64_json: pngBytes.toString('base64') }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const image = `data:image/png;base64,${pngBytes.toString('base64')}`
+    await host.generateImage(
+      { apiUrl: 'https://api.closeai.hk/v1', apiKey: 'sk-test' },
+      { mode: 'edit', model: 'gpt-image-2.5', prompt: 'replace painted area', size: '16:9', quality: 'high', n: 1, image, mask: image },
+    )
+    assert.equal(receivedUrl, 'https://api.closeai.hk/v1/images/edits')
+    assert.equal(receivedFields.get('size'), '16:9')
+    assert.equal(receivedFields.get('quality'), 'high')
+    assert.equal(receivedFields.get('mask').type, 'image/png')
+    await host.generateImage(
+      { apiUrl: 'https://api.closeai.hk/v1', apiKey: 'sk-test' },
+      { mode: 'edit', model: 'gpt-image-2.5', prompt: 'edit size', size: '1536x1024', n: 1, image },
+    )
+    assert.equal(receivedFields.get('size'), '1536x1024')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 await check('B4 config missing errors are user-presentable', async () => {
   await assert.rejects(
     host.generateImage({ apiUrl: '', apiKey: 'k' }, { mode: 'text', model: 'gpt-image-2', prompt: 'x', size: 'auto', quality: 'auto', n: 1, detail: '' }),
