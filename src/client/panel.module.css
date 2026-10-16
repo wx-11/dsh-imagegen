@@ -2098,6 +2098,12 @@ html[data-dsh-imagegen-chat-collapsed] [data-dsh-imagegen-chat-resizer] {
 .referenceActions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.maskStatus {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
 }
 
 .hiddenFile {

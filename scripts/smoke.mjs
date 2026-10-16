@@ -564,7 +564,7 @@ await check('B3b edit mode forwards every reference image', async () => {
   }
 })
 
-await check('B3c Yeahzi image edits preserve ratio, quality, and transparent mask', async () => {
+await check('B3c Yeahzi image edits preserve pixel size, quality, and transparent mask', async () => {
   const originalFetch = globalThis.fetch
   let receivedUrl = ''
   let receivedFields = new Map()
@@ -592,6 +592,12 @@ await check('B3c Yeahzi image edits preserve ratio, quality, and transparent mas
       { mode: 'edit', model: 'gpt-image-2.5', prompt: 'edit size', size: '1536x1024', n: 1, image },
     )
     assert.equal(receivedFields.get('size'), '1536x1024')
+    await host.generateImage(
+      { apiUrl: 'https://api.closeai.hk/v1', apiKey: 'sk-test' },
+      { mode: 'edit', model: 'gpt-image-2.5', prompt: '4K edit', size: '4096x2304', quality: 'high', n: 1, image },
+    )
+    assert.equal(receivedFields.get('size'), '4096x2304')
+    assert.equal(receivedFields.get('quality'), 'high')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -736,7 +742,7 @@ await check('B7 Volcengine Seedream uses Ark size and URL response fields', asyn
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       seen.push(body)
       assert.equal(body.model, 'doubao-seedream-5-0-pro-260628')
-      assert.equal(body.size, '2K')
+      assert.equal(body.size, seen.length === 1 ? '2K' : '4K')
       assert.equal(body.response_format, 'url')
       assert.equal(body.resolution, undefined)
       assert.equal(body.prompt, 'a volcano')
@@ -761,7 +767,11 @@ await check('B7 Volcengine Seedream uses Ark size and URL response fields', asyn
     )
     assert.equal(result.images.length, 1)
     assert.equal(result.images[0].b64, pngBytes.toString('base64'))
-    assert.equal(seen.length, 1)
+    await host.generateImage(
+      { apiUrl: `http://127.0.0.1:${seedream.address().port}/v1`, apiKey: 'sk-seedream' },
+      { mode: 'text', model: 'doubao-seedream-5-0-pro-260628', prompt: 'a volcano', size: '4096x2304', n: 1, detail: '' },
+    )
+    assert.equal(seen.length, 2)
   } finally {
     await new Promise(resolve => seedream.close(resolve))
   }
@@ -4399,8 +4409,9 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
     assert.ok(view.isConnected, 'view container attached to the center column')
     assert.ok([...view.querySelectorAll('button')].some(button => button.textContent.trim() === '← 回到生图首页'), 'visible studio home button')
     assert.ok(view.textContent.includes('100 张'), '100-image preset is available')
-    assert.ok(view.textContent.includes('4:5'), 'expanded aspect ratios are available')
-    assert.equal(view.textContent.includes('清晰度'), false, 'clarity controls are removed')
+    assert.equal(view.querySelectorAll('[data-dsh-select]').length, 2, 'size and quality selectors are available')
+    assert.ok(view.textContent.includes('清晰度'), 'quality controls are available')
+    assert.equal(view.textContent.includes('4:5'), false, 'aspect-ratio choices are removed from the main size control')
     assert.equal(view.textContent.includes('透传参数'), false, 'detail passthrough controls are removed')
     const customCount = view.querySelector('input[type="number"][max="100"]')
     assert.ok(customCount !== null, 'custom generation count input')

@@ -160,10 +160,22 @@ function isVolcSeedream(model: string): boolean {
   return /^doubao-seedream(?:-|$)/i.test(model.trim())
 }
 
-/** Volcengine uses `size` for the output tier, not the panel's aspect ratio. */
-function seedreamSize(): string {
-  // Seedream requires a size tier; use its default supported output size.
-  return '2K'
+function ratioFromSize(size: string): string | undefined {
+  const dimensions = /^(\d+)x(\d+)$/i.exec(size)
+  if (dimensions === null) return size.includes(':') ? size : undefined
+  const width = Number(dimensions[1])
+  const height = Number(dimensions[2])
+  if (width < 1 || height < 1) return undefined
+  const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b)
+  return `${width / gcd(width, height)}:${height / gcd(width, height)}`
+}
+
+/** Volcengine uses `size` for the output tier, not raw pixel dimensions. */
+function seedreamSize(requested: string): string {
+  const dimensions = /^(\d+)x(\d+)$/i.exec(requested)
+  if (dimensions === null) return '2K'
+  const maxSide = Math.max(Number(dimensions[1]), Number(dimensions[2]))
+  return maxSide >= 3800 ? '4K' : maxSide <= 1536 ? '1K' : '2K'
 }
 
 /** The panel's aspect ratios mapped to Qwen-Image's `宽*高` pixel sizes.
@@ -199,7 +211,9 @@ function isVersionedQwenImage(model: string): boolean {
 
 function qwenSize(model: string, ratio: string): string | undefined {
   if (ratio === '' || ratio === 'auto') return undefined
-  return (isVersionedQwenImage(model) ? QWEN_SIZE_HD : QWEN_SIZE_CLASSIC)[ratio]
+  const mappedRatio = ratioFromSize(ratio) ?? ratio
+  if (isVersionedQwenImage(model) && /^\d+x\d+$/.test(ratio)) return ratio.replace('x', '*')
+  return (isVersionedQwenImage(model) ? QWEN_SIZE_HD : QWEN_SIZE_CLASSIC)[mappedRatio]
 }
 
 /** The panel's aspect ratios mapped to the closest OpenAI pixel size
@@ -343,7 +357,7 @@ function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
   })()
   // dall-e-3 has no quality/detail knobs and only produces one image.
   if (model === 'dall-e-3') {
-    const pixel = OPENAI_SIZE_BY_RATIO[request.size]
+    const pixel = OPENAI_SIZE_BY_RATIO[request.size] ?? request.size
     const size = (pixel !== undefined && DALLE3_SIZES.has(pixel)) ? pixel : '1024x1024'
     return { model, size }
   }
@@ -352,7 +366,7 @@ function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
     return {
       model,
       ...request.size !== '' && request.size !== 'auto'
-        ? { aspect_ratio: GROK_ASPECT_ALIASES[request.size] ?? request.size }
+        ? { aspect_ratio: GROK_ASPECT_ALIASES[ratioFromSize(request.size) ?? request.size] ?? ratioFromSize(request.size) ?? request.size }
         : {},
       response_format: 'b64_json',
     }
@@ -362,7 +376,7 @@ function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
     return {
       model,
       ...request.size !== '' && request.size !== 'auto'
-        ? { aspect_ratio: request.size }
+        ? { aspect_ratio: ratioFromSize(request.size) ?? request.size }
         : {},
       response_format: 'b64_json',
     }
@@ -374,7 +388,7 @@ function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
   if (isSeedream(model)) {
     return {
       model,
-      size: seedreamSize(),
+      size: seedreamSize(request.size),
       response_format: isVolcSeedream(model) ? 'url' : 'b64_json',
     }
   }
@@ -392,8 +406,8 @@ function effectiveParams(request: GenerateRequest, upstream?: UpstreamConfig): {
   if (isZhipuImage(model)) {
     return {
       model,
-      ...request.size !== '' && request.size !== 'auto' && OPENAI_SIZE_BY_RATIO[request.size] !== undefined
-        ? { size: OPENAI_SIZE_BY_RATIO[request.size] }
+      ...request.size !== '' && request.size !== 'auto' && (OPENAI_SIZE_BY_RATIO[request.size] !== undefined || /^\d+x\d+$/.test(request.size))
+        ? { size: OPENAI_SIZE_BY_RATIO[request.size] ?? request.size }
         : {},
     }
   }
@@ -857,7 +871,7 @@ async function requestOneImage(
       model: params.model,
       prompt: request.prompt,
       n: clampCount(request.n),
-      ...request.size !== '' && request.size !== 'auto' ? { aspect_ratio: request.size } : {},
+      ...request.size !== '' && request.size !== 'auto' ? { aspect_ratio: ratioFromSize(request.size) ?? request.size } : {},
       ...request.mode === 'edit' ? { images: references } : {},
       response_format: 'b64_json',
     })
@@ -1199,7 +1213,8 @@ async function generateMiniMaxImage(
     prompt: request.prompt,
     response_format: 'base64',
   }
-  const ratio = request.size.trim()
+  const requestedSize = request.size.trim()
+  const ratio = ratioFromSize(requestedSize) ?? requestedSize
   if (ratio !== '' && ratio !== 'auto') {
     if (!MINIMAX_RATIOS.has(ratio)) {
       throw new ImageGenError(`MiniMax image-01 不支持 ${ratio} 宽高比，可选：${Array.from(MINIMAX_RATIOS).join(' / ')}`, 'size-unsupported')

@@ -35,30 +35,14 @@ import {
   type ChatImageEventDetail, type ConversationDraftAttachment, type ConversationService,
 } from './conversation-sync.ts'
 import { Select } from './Select.tsx'
+import { ImageEditOverlay } from './ImageEditOverlay.tsx'
 import { LazyDetails, ProgressiveItems, StoredThumbnail } from './ProgressiveContent.tsx'
-import { IMAGE_RATIOS, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
+import { IMAGE_RATIOS, IMAGE_SIZES, IMAGE_QUALITIES, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
 import css from './panel.module.css'
 
-/** Size options, presented as aspect ratios (auto = let the model decide).
- *  The host maps each ratio onto the model's own vocabulary: aspect_ratio for
- *  Grok Imagine, the closest pixel size for OpenAI-compatible endpoints. */
-const SIZES = IMAGE_RATIOS
-
-/** Size option keys in the locale dictionary. */
+const SIZES = IMAGE_SIZES
 /** Re-check Releases while the panel stays open; the host caches for 15 minutes. */
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60_000
-
-const SIZE_KEYS: Record<string, 'size.auto' | 'size.square' | 'size.portrait34' | 'size.landscape43' | 'size.portrait916' | 'size.portrait23' | 'size.landscape32' | 'size.wide169' | 'size.ultrawide21'> = {
-  auto: 'size.auto',
-  '1:1': 'size.square',
-  '3:4': 'size.portrait34',
-  '4:3': 'size.landscape43',
-  '9:16': 'size.portrait916',
-  '2:3': 'size.portrait23',
-  '3:2': 'size.landscape32',
-  '16:9': 'size.wide169',
-  '21:9': 'size.ultrawide21',
-}
 
 const REF_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 // The local DSH attachment backend defaults to a 2000px per-side limit. Keep
@@ -100,21 +84,37 @@ const PRODUCT_SET_SLOTS: ProductSetSlot[] = [
   { key: 'model', label: '使用图', description: '人物上手或穿戴效果', count: 1, enabled: false, refRole: 'product' },
 ]
 
-/** Legacy pixel sizes saved by older versions, mapped onto the current
- *  aspect-ratio vocabulary so restoring old history entries still works. */
-const LEGACY_SIZE_TO_RATIO: Record<string, string> = {
-  '512x512': '1:1',
-  '1024x1024': '1:1',
-  '1536x1024': '3:2',
-  '1024x1536': '2:3',
-  '1792x1024': '16:9',
-  '1024x1792': '9:16',
+const LEGACY_SIZE_TO_PIXELS: Record<string, string> = {
+  '512x512': '1024x1024',
+  '1024x1792': '2304x4096',
+  '1792x1024': '4096x2304',
+  '3:4': '1536x2048',
+  '4:3': '2048x1536',
+  '9:16': '2304x4096',
+  '16:9': '4096x2304',
+  '21:9': '4096x1755',
+  '1:1': '1024x1024',
+  '2:3': '1024x1536',
+  '3:2': '1536x1024',
 }
 
-/** Normalize a saved size value into a current dropdown option. */
-function normalizeSize(value: string): string {
+function normalizeOutputSize(value: string): string {
   if ((SIZES as readonly string[]).includes(value)) return value
-  return LEGACY_SIZE_TO_RATIO[value] ?? 'auto'
+  return LEGACY_SIZE_TO_PIXELS[value] ?? 'auto'
+}
+
+/** Convert stored pixel dimensions back to a ratio for history filters. */
+function normalizeSize(value: string): string {
+  if ((IMAGE_RATIOS as readonly string[]).includes(value)) return value
+  const normalized = normalizeOutputSize(value)
+  const match = /^(\d+)x(\d+)$/.exec(normalized)
+  if (match === null) return 'auto'
+  const ratio = Number(match[1]) / Number(match[2])
+  return IMAGE_RATIOS.filter(candidate => candidate !== 'auto').reduce((closest, candidate) => {
+    const [width, height] = candidate.split(':').map(Number)
+    const [bestWidth, bestHeight] = closest.split(':').map(Number)
+    return Math.abs(width! / height! - ratio) < Math.abs(bestWidth! / bestHeight! - ratio) ? candidate : closest
+  }, '1:1')
 }
 
 
@@ -639,6 +639,7 @@ export function ImageGenPanel(props: {
   }
   const [prompt, setPrompt] = useState('')
   const [size, setSize] = useState<string>('auto')
+  const [quality, setQuality] = useState<string>('auto')
   const [count, setCount] = useState(1)
   const [model, setModel] = useState<string>('')
   const [modelChannelId, setModelChannelId] = useState<string>('')
@@ -646,6 +647,9 @@ export function ImageGenPanel(props: {
   /** Compare selections are `${channelId}\0${model}` so duplicate aliases stay distinct. */
   const [compareModels, setCompareModels] = useState<string[]>([])
   const [refImage, setRefImage] = useState<{ dataUrl: string; name: string } | null>(null)
+  const [editMask, setEditMask] = useState<string | undefined>()
+  const [maskEditorOpen, setMaskEditorOpen] = useState(false)
+  const [maskImageDimensions, setMaskImageDimensions] = useState<{ width: number; height: number } | null>(null)
   const [extraReferences, setExtraReferences] = useState<string[]>([])
   const [images, setImages] = useState<GeneratedImage[]>([])
   const [addingToConversation, setAddingToConversation] = useState<number | string | null>(null)
@@ -1146,10 +1150,18 @@ export function ImageGenPanel(props: {
     }
     const reader = new FileReader()
     reader.onload = () => {
-      if (typeof reader.result === 'string') { setExtraReferences([]); setRefImage({ dataUrl: reader.result, name: file.name }) }
+      if (typeof reader.result === 'string') { setExtraReferences([]); setRefImage({ dataUrl: reader.result, name: file.name }); setEditMask(undefined) }
     }
     reader.onerror = () => { setError(tt('edit.uploadHint')) }
     reader.readAsDataURL(file)
+  }
+
+  const openMaskEditor = async (): Promise<void> => {
+    if (refImage === null) return
+    try {
+      setMaskImageDimensions(await imageDimensions(refImage.dataUrl))
+      setMaskEditorOpen(true)
+    } catch (caught) { setError(errorMessage(caught)) }
   }
 
   /** Read uploaded product assets into session-only data-URL chips. Product
@@ -1209,9 +1221,11 @@ export function ImageGenPanel(props: {
       mode: tab === 'edit' ? 'edit' : 'text',
       prompt: promptText,
       size,
+      quality,
       n: count,
       ...tab === 'edit' && refImage !== null ? { image: refImage.dataUrl, ...(extraReferences.length > 0 ? { images: extraReferences } : {}) } : {},
       ...tab === 'edit' && refImage !== null ? { refName: refImage.name } : {},
+      ...tab === 'edit' && editMask !== undefined ? { mask: editMask } : {},
     }
     setError(null)
     setSubmitting(true)
@@ -1990,6 +2004,7 @@ export function ImageGenPanel(props: {
     if (previewImage === null || preview === null) return
     openTab('edit')
     setExtraReferences([])
+    setEditMask(undefined)
     setRefImage({
       dataUrl: srcOf(previewImage),
       name: `dsh-image-${preview.index + 1}.${extensionOf(previewImage.mime)}`,
@@ -2011,12 +2026,14 @@ export function ImageGenPanel(props: {
       setPrompt(entry.prompt)
       setModel(entry.model)
       setModelChannelId(entry.channelId ?? '')
-      setSize(normalizeSize(entry.size))
+      setSize(normalizeOutputSize(entry.size))
+      setQuality(entry.quality ?? 'auto')
       setCount(normalizeImageCount(entry.n))
       setCompareEnabled(false)
       setComparison(null)
       setRefImage(refs[0] === undefined ? null : { dataUrl: refs[0], name: entry.refName ?? tt('tasks.references') })
       setExtraReferences(refs.slice(1))
+      setEditMask(request?.mask)
       setError(entry.mode === 'edit' && refs.length === 0 ? tt('tasks.missingReferences') : null)
     } catch (caught) { setError(errorMessage(caught)) }
   }
@@ -2519,7 +2536,7 @@ export function ImageGenPanel(props: {
                     </label>
                     <label className={css.ecommerceField}>
                       <span className={css.ecommerceFieldLabel}>{tt('ecommerce.ratioLabel')}</span>
-                      <Select value={ecommerce.size} onChange={value => setEcommerce(previous => ({ ...previous, size: value }))}>{SIZES.filter(size => size !== 'auto').map(size => <option key={size}>{size}</option>)}</Select>
+                      <Select value={ecommerce.size} onChange={value => setEcommerce(previous => ({ ...previous, size: value }))}>{IMAGE_RATIOS.filter(size => size !== 'auto').map(size => <option key={size}>{size}</option>)}</Select>
                     </label>
                   </div>
                 </div>
@@ -2627,13 +2644,17 @@ export function ImageGenPanel(props: {
                       <img className={css.referenceImage} src={refImage.dataUrl} alt={refImage.name} />
                       <div className={css.referenceActions}>
                         {extraReferences.length > 0 ? <span>{tt('tasks.references')} · {extraReferences.length + 1}</span> : null}
+                        <Button variant="outline" size="sm" onClick={() => { void openMaskEditor() }}>
+                          {editMask === undefined ? tt('edit.paintMask') : tt('edit.editMask')}
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => { fileInput.current?.click() }}>
                           {tt('edit.change')}
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => { setRefImage(null); setExtraReferences([]) }}>
+                        <Button variant="outline" size="sm" onClick={() => { setRefImage(null); setExtraReferences([]); setEditMask(undefined) }}>
                           {tt('edit.remove')}
                         </Button>
                       </div>
+                      {editMask !== undefined ? <span className={css.maskStatus}>{tt('edit.maskReady')}</span> : null}
                     </div>
                   )}
                 <input
@@ -2693,18 +2714,15 @@ export function ImageGenPanel(props: {
             <section className={css.card}>
               <div className={css.paramGroup}>
                 <span className={css.paramLabel}>{tt('params.size')}</span>
-                <div className={css.optionGrid}>
-                  {SIZES.map(option => (
-                    <Pill
-                      key={option}
-                      active={size === option}
-                      onClick={() => { setSize(option) }}
-                      className={css.optionPill}
-                    >
-                      {SIZE_KEYS[option] ? tt(SIZE_KEYS[option]) : option}
-                    </Pill>
-                  ))}
-                </div>
+                <Select value={size} onChange={setSize}>
+                  {SIZES.map(option => <option key={option} value={option}>{option === 'auto' ? tt('size.auto') : option}</option>)}
+                </Select>
+              </div>
+              <div className={css.paramGroup}>
+                <span className={css.paramLabel}>{tt('params.quality')}</span>
+                <Select value={quality} onChange={setQuality}>
+                  {IMAGE_QUALITIES.map(option => <option key={option} value={option}>{option === 'auto' ? tt('quality.auto') : option}</option>)}
+                </Select>
               </div>
               <div className={css.paramGroup}>
                 <span className={css.paramLabel}>{tt('params.count')}</span>
@@ -3313,6 +3331,18 @@ export function ImageGenPanel(props: {
           {conversationMessage}
         </div>
       ) : null}
+      {maskEditorOpen && refImage !== null && maskImageDimensions !== null ? <ImageEditOverlay
+        imageUrl={refImage.dataUrl}
+        imageWidth={maskImageDimensions.width}
+        imageHeight={maskImageDimensions.height}
+        modelGroups={modeGroups}
+        defaultChannelId={defaultChannelId}
+        connected
+        maskOnly
+        onClose={() => { setMaskEditorOpen(false) }}
+        onMaskSubmit={setEditMask}
+        onSubmit={async () => {}}
+      /> : null}
       <DiagnosticsPanel api={api} open={diagnosticsOpen} onClose={() => { setDiagnosticsOpen(false) }} />
     </div>
   )

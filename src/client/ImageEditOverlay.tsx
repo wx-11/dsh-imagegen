@@ -3,6 +3,7 @@ import { Eraser, Pencil, Redo2, Undo2, X } from 'lucide-react'
 import type { ImageModelGroup } from './settings-scope.ts'
 import { ModelPicker, resolveModelChoice } from './ModelPicker.tsx'
 import { tt } from './helpers.ts'
+import { IMAGE_SIZES, IMAGE_QUALITIES } from '../image-options.ts'
 import css from './image-edit.module.css'
 
 type MaskStroke = { mode: 'paint' | 'restore'; width: number; points: Array<{ x: number; y: number }> }
@@ -26,7 +27,9 @@ export function ImageEditOverlay(props: {
   connectedChannelIds?: ReadonlySet<string>
   initialModel?: string
   initialChannelId?: string
+  maskOnly?: boolean
   onClose: () => void
+  onMaskSubmit?: (mask: string) => void
   onSubmit: (submission: ImageEditSubmission) => Promise<void>
 }): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -160,9 +163,9 @@ export function ImageEditOverlay(props: {
   useEffect(() => { redrawPreview() }, [strokes])
 
   const submit = async (): Promise<void> => {
-    if (prompt.trim() === '') { setError(tt('canvas.editNeedPrompt')); return }
+    if (!props.maskOnly && prompt.trim() === '') { setError(tt('canvas.editNeedPrompt')); return }
     if (strokes.length === 0) { setError(tt('canvas.editNeedMask')); return }
-    if (choice.model === '') { setError(tt('canvas.needModel')); return }
+    if (!props.maskOnly && choice.model === '') { setError(tt('canvas.needModel')); return }
     const maskCanvas = document.createElement('canvas')
     maskCanvas.width = props.imageWidth
     maskCanvas.height = props.imageHeight
@@ -195,14 +198,10 @@ export function ImageEditOverlay(props: {
     setBusy(true)
     setError('')
     try {
-      await props.onSubmit({
-        model: choice.model,
-        channelId: choice.channelId,
-        prompt: prompt.trim(),
-        size,
-        quality,
-        mask: maskCanvas.toDataURL('image/png'),
-      })
+      const mask = maskCanvas.toDataURL('image/png')
+      if (props.maskOnly) props.onMaskSubmit?.(mask)
+      else await props.onSubmit({ model: choice.model, channelId: choice.channelId, prompt: prompt.trim(), size, quality, mask })
+      if (props.maskOnly) props.onClose()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally { setBusy(false) }
@@ -231,13 +230,15 @@ export function ImageEditOverlay(props: {
             <button type="button" title={tt('canvas.redo')} disabled={redo.length === 0} onClick={redoStroke}><Redo2 size={16} /></button>
           </div>
           <label>{tt('canvas.editBrushSize')}<input type="range" min="4" max="120" value={brushSize} onChange={event => setBrushSize(Number(event.target.value))} /></label>
-          <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.editPromptPlaceholder')} />
-          <ModelPicker groups={props.modelGroups} value={choice} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={setChoice} />
-          <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{['auto', '1024x1024', '1536x1024', '1024x1536', '1:1', '3:4', '4:3', '9:16', '2:3', '3:2', '16:9', '21:9', '4:5', '5:4', '5:7', '7:5', '9:21', '1:2', '2:1', '1:3', '3:1'].map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : value}</option>)}</select></label>
-          <label>{tt('canvas.editQuality')}<select value={quality} onChange={event => setQuality(event.target.value)}>{['auto', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.qualityAuto') : value}</option>)}</select></label>
-          <div className={css.hint}>{tt('canvas.editHint')}</div>
-          <button className={css.submit} type="button" disabled={busy || !connected} onClick={() => { void submit() }}>{busy ? tt('canvas.generatingNode') : tt('canvas.editSubmit')}</button>
-          {!connected ? <small>{tt('canvas.needApi')}</small> : null}
+          {!props.maskOnly ? <>
+            <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.editPromptPlaceholder')} />
+            <ModelPicker groups={props.modelGroups} value={choice} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={setChoice} />
+            <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{IMAGE_SIZES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : value}</option>)}</select></label>
+            <label>{tt('canvas.editQuality')}<select value={quality} onChange={event => setQuality(event.target.value)}>{IMAGE_QUALITIES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.qualityAuto') : value}</option>)}</select></label>
+            <div className={css.hint}>{tt('canvas.editHint')}</div>
+          </> : null}
+          <button className={css.submit} type="button" disabled={busy || (!props.maskOnly && !connected)} onClick={() => { void submit() }}>{busy ? tt('canvas.generatingNode') : props.maskOnly ? tt('edit.maskApply') : tt('canvas.editSubmit')}</button>
+          {!props.maskOnly && !connected ? <small>{tt('canvas.needApi')}</small> : null}
           {error !== '' ? <small role="alert">{error}</small> : null}
         </aside>
       </div>

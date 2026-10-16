@@ -964,10 +964,8 @@ export interface GenerateRequest extends EcommerceTaskMeta {
   model: string
   /** The prompt. Upstream providers may impose their own length limits. */
   prompt: string
-  /** Canvas size as an aspect ratio: 'auto' or e.g. '1:1' / '16:9' / '21:9'.
-   *  The host maps it onto each model's own vocabulary (aspect_ratio for Grok
-   *  and Nano Banana, resolution-tier size for Seedream, the closest pixel size for
-   *  OpenAI-compatible endpoints). */
+  /** Requested output dimensions such as '2048x2048' / '4096x2304'; legacy
+   *  aspect-ratio values remain accepted for saved tasks and API clients. */
   size: string
   /** Optional upstream quality tier (currently forwarded by Yeahzi channels). */
   quality?: string
