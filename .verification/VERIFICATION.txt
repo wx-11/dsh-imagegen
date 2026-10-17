@@ -1,0 +1,26 @@
+Changed branch/field:
+- src/image-options.ts: IMAGE_SIZES uses Yeahzi-compatible WxH presets; 4K metadata marks upscale.
+- src/client/ImageGenPanel.tsx and src/client/ImageEditOverlay.tsx: WxH labels and brush/editor controls.
+- src/engine.ts: masked edits submit only the primary reference; upstream timeout is 300 seconds.
+- src/templates-store.ts: camo upstream candidates, allow-list filtering, invalid-cache/download failure logs, one-hour failure cache.
+
+Artifacts:
+- MODIFIED_FILE: .verification/MODIFIED_FILE
+- DIFF_FILE: .verification/DIFF_FILE
+- VERIFICATION.txt: .verification/VERIFICATION.txt
+- ROLLBACK.sh: .verification/ROLLBACK.sh
+
+BASELINE:
+command: git diff --check HEAD -- src
+result: clean baseline before source edits
+exit: 0
+
+MODIFIED:
+command: pnpm typecheck && pnpm build && node scripts/template-cache-test.mjs && node scripts/image-options-test.mjs && node scripts/smoke.mjs && node scripts/package-test.mjs && git diff --check
+result: all commands passed; template cache, image options, smoke, package, and diff checks passed
+exit: 0
+
+ROLLBACK:
+command: ./.verification/ROLLBACK.sh ./.verification/rollback-copy ./.verification/rollback-copy.orig
+result: rollback copy restored byte-for-byte; MODIFIED_FILE remains changed
+exit: 0

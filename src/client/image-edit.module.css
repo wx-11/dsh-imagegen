@@ -39,15 +39,17 @@
 
 .body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; overflow: hidden; }
 .workarea { display: grid; place-items: center; min-width: 0; min-height: 360px; max-height: calc(94vh - 50px); overflow: auto; padding: 20px; background: #11151a; }
-.stage { position: relative; width: fit-content; max-width: 100%; max-height: calc(94vh - 110px); overflow: hidden; }
+.stage { position: relative; width: fit-content; max-width: 100%; max-height: calc(94vh - 110px); overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.32); }
 .stage img { display: block; width: auto; height: auto; max-width: 100%; max-height: calc(94vh - 110px); object-fit: contain; user-select: none; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
 
-.controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 14px; border-left: 1px solid var(--dsw-alias-border-primary); }
-.tools { display: flex; align-items: center; gap: 4px; }
+.controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 16px; border-left: 1px solid var(--dsw-alias-border-primary); background: color-mix(in srgb, var(--dsw-alias-bg-primary) 92%, #000); }
+.tools { display: flex; align-items: center; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-primary); }
 .tools button[data-active] { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); color: var(--dsw-alias-brand-primary); }
 .tools button:disabled { opacity: .35; cursor: not-allowed; }
 .tools span { flex: 1; }
+.brushControl > span { display: flex; justify-content: space-between; align-items: center; }
+.brushControl output { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 .controls label { display: grid; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .controls input[type="range"] { width: 100%; accent-color: var(--dsw-alias-brand-primary); }
 .controls select, .controls textarea { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-primary); border-radius: 6px; background: var(--dsw-alias-bg-secondary); color: var(--dsw-alias-label-primary); font: inherit; }
@@ -65,5 +67,6 @@
   .workarea { min-height: 220px; max-height: 52vh; padding: 10px; }
   .stage, .stage img { max-height: 48vh; }
   .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border-top: 1px solid var(--dsw-alias-border-primary); border-left: 0; padding: 10px; }
+  .brushControl { grid-column: 1 / -1; }
   .tools, .controls textarea, .hint, .submit, .controls small { grid-column: 1 / -1; }
 }

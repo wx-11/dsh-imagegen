@@ -37,7 +37,7 @@ import {
 import { Select } from './Select.tsx'
 import { ImageEditOverlay } from './ImageEditOverlay.tsx'
 import { LazyDetails, ProgressiveItems, StoredThumbnail } from './ProgressiveContent.tsx'
-import { IMAGE_RATIOS, IMAGE_SIZES, IMAGE_QUALITIES, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
+import { IMAGE_RATIOS, IMAGE_SIZES, IMAGE_QUALITIES, IMAGE_COUNTS, imageSizeNeedsUpscale, imageSizeTier, normalizeImageCount } from '../image-options.ts'
 import css from './panel.module.css'
 
 const SIZES = IMAGE_SIZES
@@ -86,13 +86,13 @@ const PRODUCT_SET_SLOTS: ProductSetSlot[] = [
 
 const LEGACY_SIZE_TO_PIXELS: Record<string, string> = {
   '512x512': '1024x1024',
-  '1024x1792': '2304x4096',
-  '1792x1024': '4096x2304',
+  '1024x1792': '2160x3840',
+  '1792x1024': '3840x2160',
   '3:4': '1536x2048',
   '4:3': '2048x1536',
-  '9:16': '2304x4096',
-  '16:9': '4096x2304',
-  '21:9': '4096x1755',
+  '9:16': '2160x3840',
+  '16:9': '3840x2160',
+  '21:9': '2560x1088',
   '1:1': '1024x1024',
   '2:3': '1024x1536',
   '3:2': '1536x1024',
@@ -101,6 +101,12 @@ const LEGACY_SIZE_TO_PIXELS: Record<string, string> = {
 function normalizeOutputSize(value: string): string {
   if ((SIZES as readonly string[]).includes(value)) return value
   return LEGACY_SIZE_TO_PIXELS[value] ?? 'auto'
+}
+
+function sizeLabel(value: string): string {
+  if (value === 'auto') return tt('size.auto')
+  const tier = imageSizeTier(value)
+  return `${value} · ${tier}${imageSizeNeedsUpscale(value) ? ' · 超分' : ''}`
 }
 
 /** Convert stored pixel dimensions back to a ratio for history filters. */
@@ -2715,7 +2721,7 @@ export function ImageGenPanel(props: {
               <div className={css.paramGroup}>
                 <span className={css.paramLabel}>{tt('params.size')}</span>
                 <Select value={size} onChange={setSize}>
-                  {SIZES.map(option => <option key={option} value={option}>{option === 'auto' ? tt('size.auto') : option}</option>)}
+                  {SIZES.map(option => <option key={option} value={option}>{sizeLabel(option)}</option>)}
                 </Select>
               </div>
               <div className={css.paramGroup}>

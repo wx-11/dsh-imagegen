@@ -41,7 +41,7 @@ export class ImageGenError extends Error {
 }
 
 /** Total budget for the upstream generation call (image models are slow). */
-const UPSTREAM_TIMEOUT_MS = 240_000
+const UPSTREAM_TIMEOUT_MS = 300_000
 
 /** Budget for downloading one result image URL. */
 const IMAGE_FETCH_TIMEOUT_MS = 60_000
@@ -837,7 +837,7 @@ async function pollAsyncTask(
     await waitForPoll(Math.min(delay, Math.max(1, deadline - Date.now())), signal)
     delay = Math.min(5000, delay * 2)
   }
-  throw new ImageGenError('上游异步任务轮询超时（240 秒）', 'upstream-timeout')
+  throw new ImageGenError('上游异步任务轮询超时（300 秒）', 'upstream-timeout')
 }
 
 /**
@@ -898,6 +898,10 @@ async function requestOneImage(
       .filter(img => typeof img === 'string' && img !== '')
       .slice(0, 4)
       .map(decodeReference)
+    // Yeahzi ignores every image after the first when a mask is present.
+    const editReferences = typeof request.mask === 'string' && request.mask !== ''
+      ? [primary]
+      : [primary, ...extras]
     // Grok Imagine /images/edits takes a JSON image_url object (a base64 data
     // URI is accepted) instead of OpenAI's multipart form-data upload.
     if (isGrokImagine(params.model)) {
@@ -932,10 +936,10 @@ async function requestOneImage(
       })
     } else {
       const form = new FormData()
-      if (extras.length > 0) {
+      if (editReferences.length > 1) {
         // OpenAI-style multi-reference upload: repeat the image[] field so
         // every connected canvas reference reaches the gateway.
-        for (const [index, reference] of [primary, ...extras].entries()) {
+        for (const [index, reference] of editReferences.entries()) {
           form.append('image[]', new Blob([reference.bytes], { type: reference.mime }), `reference-${index}.${extensionOf(reference.mime)}`)
         }
       } else {
@@ -980,7 +984,7 @@ async function requestOneImage(
       // without opening diagnostics.
       const network = networkErrorFields(error)
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(
@@ -1001,7 +1005,7 @@ async function requestOneImage(
       payload = JSON.parse(responseText)
     } catch (error) {
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
@@ -1121,7 +1125,7 @@ async function generateQwenImage(
     } catch (error) {
       const network = networkErrorFields(error)
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : options.signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(
@@ -1140,7 +1144,7 @@ async function generateQwenImage(
       payload = JSON.parse(responseText)
     } catch (error) {
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : options.signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
@@ -1255,7 +1259,7 @@ async function generateMiniMaxImage(
     } catch (error) {
       const network = networkErrorFields(error)
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : options.signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(
@@ -1273,7 +1277,7 @@ async function generateMiniMaxImage(
       payload = JSON.parse(responseText)
     } catch (error) {
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : options.signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
@@ -1373,7 +1377,7 @@ async function requestOneChatImage(
     } catch (error) {
       const network = networkErrorFields(error)
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(
@@ -1392,7 +1396,7 @@ async function requestOneChatImage(
       payload = JSON.parse(responseText)
     } catch (error) {
       const failure = isBudgetTimeout(error)
-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
+        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
         : signal?.aborted === true
           ? new ImageGenError('任务已取消', 'cancelled')
           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')

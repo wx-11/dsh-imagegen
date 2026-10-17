@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { Eraser, Pencil, Redo2, Undo2, X } from 'lucide-react'
+import { Eraser, Pencil, Redo2, RotateCcw, Undo2, X } from 'lucide-react'
 import type { ImageModelGroup } from './settings-scope.ts'
 import { ModelPicker, resolveModelChoice } from './ModelPicker.tsx'
 import { tt } from './helpers.ts'
-import { IMAGE_SIZES, IMAGE_QUALITIES } from '../image-options.ts'
+import { IMAGE_SIZES, IMAGE_QUALITIES, imageSizeNeedsUpscale, imageSizeTier } from '../image-options.ts'
 import css from './image-edit.module.css'
 
 type MaskStroke = { mode: 'paint' | 'restore'; width: number; points: Array<{ x: number; y: number }> }
@@ -160,6 +160,12 @@ export function ImageEditOverlay(props: {
     setRedo(previous => previous.slice(0, -1))
   }
 
+  const clearMask = (): void => {
+    strokesRef.current = []
+    setStrokes([])
+    setRedo([])
+  }
+
   useEffect(() => { redrawPreview() }, [strokes])
 
   const submit = async (): Promise<void> => {
@@ -223,19 +229,20 @@ export function ImageEditOverlay(props: {
         </div>
         <aside className={css.controls}>
           <div className={css.tools}>
-            <button type="button" data-active={tool === 'paint' ? '' : undefined} title={tt('canvas.editBrush')} onClick={() => setTool('paint')}><Pencil size={16} /></button>
-            <button type="button" data-active={tool === 'restore' ? '' : undefined} title={tt('canvas.editRestore')} onClick={() => setTool('restore')}><Eraser size={16} /></button>
+            <button type="button" aria-label={tt('canvas.editBrush')} data-active={tool === 'paint' ? '' : undefined} title={tt('canvas.editBrush')} onClick={() => setTool('paint')}><Pencil size={16} /></button>
+            <button type="button" aria-label={tt('canvas.editRestore')} data-active={tool === 'restore' ? '' : undefined} title={tt('canvas.editRestore')} onClick={() => setTool('restore')}><Eraser size={16} /></button>
             <span />
-            <button type="button" title={tt('canvas.undo')} disabled={strokes.length === 0} onClick={undo}><Undo2 size={16} /></button>
-            <button type="button" title={tt('canvas.redo')} disabled={redo.length === 0} onClick={redoStroke}><Redo2 size={16} /></button>
+            <button type="button" aria-label={tt('canvas.undo')} title={tt('canvas.undo')} disabled={strokes.length === 0} onClick={undo}><Undo2 size={16} /></button>
+            <button type="button" aria-label={tt('canvas.redo')} title={tt('canvas.redo')} disabled={redo.length === 0} onClick={redoStroke}><Redo2 size={16} /></button>
+            <button type="button" aria-label="清空蒙版" title="清空蒙版" disabled={strokes.length === 0} onClick={clearMask}><RotateCcw size={16} /></button>
           </div>
-          <label>{tt('canvas.editBrushSize')}<input type="range" min="4" max="120" value={brushSize} onChange={event => setBrushSize(Number(event.target.value))} /></label>
+          <label className={css.brushControl}><span>{tt('canvas.editBrushSize')}<output>{brushSize}px</output></span><input type="range" min="4" max="120" value={brushSize} onChange={event => setBrushSize(Number(event.target.value))} /></label>
           {!props.maskOnly ? <>
             <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.editPromptPlaceholder')} />
             <ModelPicker groups={props.modelGroups} value={choice} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={setChoice} />
-            <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{IMAGE_SIZES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : value}</option>)}</select></label>
+            <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{IMAGE_SIZES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : `${value} · ${imageSizeTier(value)}${imageSizeNeedsUpscale(value) ? ' · 超分' : ''}`}</option>)}</select></label>
             <label>{tt('canvas.editQuality')}<select value={quality} onChange={event => setQuality(event.target.value)}>{IMAGE_QUALITIES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.qualityAuto') : value}</option>)}</select></label>
-            <div className={css.hint}>{tt('canvas.editHint')}</div>
+            <div className={css.hint}>{tt('canvas.editHint')} 透明区域会被重绘；带蒙版时只提交第一张参考图。</div>
           </> : null}
           <button className={css.submit} type="button" disabled={busy || (!props.maskOnly && !connected)} onClick={() => { void submit() }}>{busy ? tt('canvas.generatingNode') : props.maskOnly ? tt('edit.maskApply') : tt('canvas.editSubmit')}</button>
           {!props.maskOnly && !connected ? <small>{tt('canvas.needApi')}</small> : null}

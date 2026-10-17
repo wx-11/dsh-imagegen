@@ -1,0 +1,421 @@
+diff --git a/src/client/ImageEditOverlay.tsx b/src/client/ImageEditOverlay.tsx
+index 7d50ee9..5fa94a1 100644
+--- a/src/client/ImageEditOverlay.tsx
++++ b/src/client/ImageEditOverlay.tsx
+@@ -1,9 +1,9 @@
+ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+-import { Eraser, Pencil, Redo2, Undo2, X } from 'lucide-react'
++import { Eraser, Pencil, Redo2, RotateCcw, Undo2, X } from 'lucide-react'
+ import type { ImageModelGroup } from './settings-scope.ts'
+ import { ModelPicker, resolveModelChoice } from './ModelPicker.tsx'
+ import { tt } from './helpers.ts'
+-import { IMAGE_SIZES, IMAGE_QUALITIES } from '../image-options.ts'
++import { IMAGE_SIZES, IMAGE_QUALITIES, imageSizeNeedsUpscale, imageSizeTier } from '../image-options.ts'
+ import css from './image-edit.module.css'
+ 
+ type MaskStroke = { mode: 'paint' | 'restore'; width: number; points: Array<{ x: number; y: number }> }
+@@ -160,6 +160,12 @@ export function ImageEditOverlay(props: {
+     setRedo(previous => previous.slice(0, -1))
+   }
+ 
++  const clearMask = (): void => {
++    strokesRef.current = []
++    setStrokes([])
++    setRedo([])
++  }
++
+   useEffect(() => { redrawPreview() }, [strokes])
+ 
+   const submit = async (): Promise<void> => {
+@@ -223,19 +229,20 @@ export function ImageEditOverlay(props: {
+         </div>
+         <aside className={css.controls}>
+           <div className={css.tools}>
+-            <button type="button" data-active={tool === 'paint' ? '' : undefined} title={tt('canvas.editBrush')} onClick={() => setTool('paint')}><Pencil size={16} /></button>
+-            <button type="button" data-active={tool === 'restore' ? '' : undefined} title={tt('canvas.editRestore')} onClick={() => setTool('restore')}><Eraser size={16} /></button>
++            <button type="button" aria-label={tt('canvas.editBrush')} data-active={tool === 'paint' ? '' : undefined} title={tt('canvas.editBrush')} onClick={() => setTool('paint')}><Pencil size={16} /></button>
++            <button type="button" aria-label={tt('canvas.editRestore')} data-active={tool === 'restore' ? '' : undefined} title={tt('canvas.editRestore')} onClick={() => setTool('restore')}><Eraser size={16} /></button>
+             <span />
+-            <button type="button" title={tt('canvas.undo')} disabled={strokes.length === 0} onClick={undo}><Undo2 size={16} /></button>
+-            <button type="button" title={tt('canvas.redo')} disabled={redo.length === 0} onClick={redoStroke}><Redo2 size={16} /></button>
++            <button type="button" aria-label={tt('canvas.undo')} title={tt('canvas.undo')} disabled={strokes.length === 0} onClick={undo}><Undo2 size={16} /></button>
++            <button type="button" aria-label={tt('canvas.redo')} title={tt('canvas.redo')} disabled={redo.length === 0} onClick={redoStroke}><Redo2 size={16} /></button>
++            <button type="button" aria-label="清空蒙版" title="清空蒙版" disabled={strokes.length === 0} onClick={clearMask}><RotateCcw size={16} /></button>
+           </div>
+-          <label>{tt('canvas.editBrushSize')}<input type="range" min="4" max="120" value={brushSize} onChange={event => setBrushSize(Number(event.target.value))} /></label>
++          <label className={css.brushControl}><span>{tt('canvas.editBrushSize')}<output>{brushSize}px</output></span><input type="range" min="4" max="120" value={brushSize} onChange={event => setBrushSize(Number(event.target.value))} /></label>
+           {!props.maskOnly ? <>
+             <textarea value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={tt('canvas.editPromptPlaceholder')} />
+             <ModelPicker groups={props.modelGroups} value={choice} channelLabel={tt('model.channel')} modelLabel={tt('model.label')} channelPlaceholder={tt('model.channelPlaceholder')} emptyLabel={tt('canvas.modelPlaceholder')} ariaLabel={tt('canvas.model')} onChange={setChoice} />
+-            <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{IMAGE_SIZES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : value}</option>)}</select></label>
++            <label>{tt('canvas.size')}<select value={size} onChange={event => setSize(event.target.value)}>{IMAGE_SIZES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.sizeAuto') : `${value} · ${imageSizeTier(value)}${imageSizeNeedsUpscale(value) ? ' · 超分' : ''}`}</option>)}</select></label>
+             <label>{tt('canvas.editQuality')}<select value={quality} onChange={event => setQuality(event.target.value)}>{IMAGE_QUALITIES.map(value => <option key={value} value={value}>{value === 'auto' ? tt('canvas.qualityAuto') : value}</option>)}</select></label>
+-            <div className={css.hint}>{tt('canvas.editHint')}</div>
++            <div className={css.hint}>{tt('canvas.editHint')} 透明区域会被重绘；带蒙版时只提交第一张参考图。</div>
+           </> : null}
+           <button className={css.submit} type="button" disabled={busy || (!props.maskOnly && !connected)} onClick={() => { void submit() }}>{busy ? tt('canvas.generatingNode') : props.maskOnly ? tt('edit.maskApply') : tt('canvas.editSubmit')}</button>
+           {!props.maskOnly && !connected ? <small>{tt('canvas.needApi')}</small> : null}
+diff --git a/src/client/ImageGenPanel.tsx b/src/client/ImageGenPanel.tsx
+index 5cd0fa9..13b36b9 100644
+--- a/src/client/ImageGenPanel.tsx
++++ b/src/client/ImageGenPanel.tsx
+@@ -37,7 +37,7 @@ import {
+ import { Select } from './Select.tsx'
+ import { ImageEditOverlay } from './ImageEditOverlay.tsx'
+ import { LazyDetails, ProgressiveItems, StoredThumbnail } from './ProgressiveContent.tsx'
+-import { IMAGE_RATIOS, IMAGE_SIZES, IMAGE_QUALITIES, IMAGE_COUNTS, normalizeImageCount } from '../image-options.ts'
++import { IMAGE_RATIOS, IMAGE_SIZES, IMAGE_QUALITIES, IMAGE_COUNTS, imageSizeNeedsUpscale, imageSizeTier, normalizeImageCount } from '../image-options.ts'
+ import css from './panel.module.css'
+ 
+ const SIZES = IMAGE_SIZES
+@@ -86,13 +86,13 @@ const PRODUCT_SET_SLOTS: ProductSetSlot[] = [
+ 
+ const LEGACY_SIZE_TO_PIXELS: Record<string, string> = {
+   '512x512': '1024x1024',
+-  '1024x1792': '2304x4096',
+-  '1792x1024': '4096x2304',
++  '1024x1792': '2160x3840',
++  '1792x1024': '3840x2160',
+   '3:4': '1536x2048',
+   '4:3': '2048x1536',
+-  '9:16': '2304x4096',
+-  '16:9': '4096x2304',
+-  '21:9': '4096x1755',
++  '9:16': '2160x3840',
++  '16:9': '3840x2160',
++  '21:9': '2560x1088',
+   '1:1': '1024x1024',
+   '2:3': '1024x1536',
+   '3:2': '1536x1024',
+@@ -103,6 +103,12 @@ function normalizeOutputSize(value: string): string {
+   return LEGACY_SIZE_TO_PIXELS[value] ?? 'auto'
+ }
+ 
++function sizeLabel(value: string): string {
++  if (value === 'auto') return tt('size.auto')
++  const tier = imageSizeTier(value)
++  return `${value} · ${tier}${imageSizeNeedsUpscale(value) ? ' · 超分' : ''}`
++}
++
+ /** Convert stored pixel dimensions back to a ratio for history filters. */
+ function normalizeSize(value: string): string {
+   if ((IMAGE_RATIOS as readonly string[]).includes(value)) return value
+@@ -2715,7 +2721,7 @@ export function ImageGenPanel(props: {
+               <div className={css.paramGroup}>
+                 <span className={css.paramLabel}>{tt('params.size')}</span>
+                 <Select value={size} onChange={setSize}>
+-                  {SIZES.map(option => <option key={option} value={option}>{option === 'auto' ? tt('size.auto') : option}</option>)}
++                  {SIZES.map(option => <option key={option} value={option}>{sizeLabel(option)}</option>)}
+                 </Select>
+               </div>
+               <div className={css.paramGroup}>
+diff --git a/src/client/image-edit.module.css b/src/client/image-edit.module.css
+index c9b95b9..7ffcfd6 100644
+--- a/src/client/image-edit.module.css
++++ b/src/client/image-edit.module.css
+@@ -39,15 +39,17 @@
+ 
+ .body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; overflow: hidden; }
+ .workarea { display: grid; place-items: center; min-width: 0; min-height: 360px; max-height: calc(94vh - 50px); overflow: auto; padding: 20px; background: #11151a; }
+-.stage { position: relative; width: fit-content; max-width: 100%; max-height: calc(94vh - 110px); overflow: hidden; }
++.stage { position: relative; width: fit-content; max-width: 100%; max-height: calc(94vh - 110px); overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.32); }
+ .stage img { display: block; width: auto; height: auto; max-width: 100%; max-height: calc(94vh - 110px); object-fit: contain; user-select: none; }
+ .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+ 
+-.controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 14px; border-left: 1px solid var(--dsw-alias-border-primary); }
+-.tools { display: flex; align-items: center; gap: 4px; }
++.controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 16px; border-left: 1px solid var(--dsw-alias-border-primary); background: color-mix(in srgb, var(--dsw-alias-bg-primary) 92%, #000); }
++.tools { display: flex; align-items: center; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-primary); }
+ .tools button[data-active] { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); color: var(--dsw-alias-brand-primary); }
+ .tools button:disabled { opacity: .35; cursor: not-allowed; }
+ .tools span { flex: 1; }
++.brushControl > span { display: flex; justify-content: space-between; align-items: center; }
++.brushControl output { color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+ .controls label { display: grid; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+ .controls input[type="range"] { width: 100%; accent-color: var(--dsw-alias-brand-primary); }
+ .controls select, .controls textarea { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-primary); border-radius: 6px; background: var(--dsw-alias-bg-secondary); color: var(--dsw-alias-label-primary); font: inherit; }
+@@ -65,5 +67,6 @@
+   .workarea { min-height: 220px; max-height: 52vh; padding: 10px; }
+   .stage, .stage img { max-height: 48vh; }
+   .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border-top: 1px solid var(--dsw-alias-border-primary); border-left: 0; padding: 10px; }
++  .brushControl { grid-column: 1 / -1; }
+   .tools, .controls textarea, .hint, .submit, .controls small { grid-column: 1 / -1; }
+ }
+diff --git a/src/engine.ts b/src/engine.ts
+index 84a5b49..2172d8b 100644
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -41,7 +41,7 @@ export class ImageGenError extends Error {
+ }
+ 
+ /** Total budget for the upstream generation call (image models are slow). */
+-const UPSTREAM_TIMEOUT_MS = 240_000
++const UPSTREAM_TIMEOUT_MS = 300_000
+ 
+ /** Budget for downloading one result image URL. */
+ const IMAGE_FETCH_TIMEOUT_MS = 60_000
+@@ -837,7 +837,7 @@ async function pollAsyncTask(
+     await waitForPoll(Math.min(delay, Math.max(1, deadline - Date.now())), signal)
+     delay = Math.min(5000, delay * 2)
+   }
+-  throw new ImageGenError('上游异步任务轮询超时（240 秒）', 'upstream-timeout')
++  throw new ImageGenError('上游异步任务轮询超时（300 秒）', 'upstream-timeout')
+ }
+ 
+ /**
+@@ -898,6 +898,10 @@ async function requestOneImage(
+       .filter(img => typeof img === 'string' && img !== '')
+       .slice(0, 4)
+       .map(decodeReference)
++    // Yeahzi ignores every image after the first when a mask is present.
++    const editReferences = typeof request.mask === 'string' && request.mask !== ''
++      ? [primary]
++      : [primary, ...extras]
+     // Grok Imagine /images/edits takes a JSON image_url object (a base64 data
+     // URI is accepted) instead of OpenAI's multipart form-data upload.
+     if (isGrokImagine(params.model)) {
+@@ -932,10 +936,10 @@ async function requestOneImage(
+       })
+     } else {
+       const form = new FormData()
+-      if (extras.length > 0) {
++      if (editReferences.length > 1) {
+         // OpenAI-style multi-reference upload: repeat the image[] field so
+         // every connected canvas reference reaches the gateway.
+-        for (const [index, reference] of [primary, ...extras].entries()) {
++        for (const [index, reference] of editReferences.entries()) {
+           form.append('image[]', new Blob([reference.bytes], { type: reference.mime }), `reference-${index}.${extensionOf(reference.mime)}`)
+         }
+       } else {
+@@ -980,7 +984,7 @@ async function requestOneImage(
+       // without opening diagnostics.
+       const network = networkErrorFields(error)
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(
+@@ -1001,7 +1005,7 @@ async function requestOneImage(
+       payload = JSON.parse(responseText)
+     } catch (error) {
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
+@@ -1121,7 +1125,7 @@ async function generateQwenImage(
+     } catch (error) {
+       const network = networkErrorFields(error)
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : options.signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(
+@@ -1140,7 +1144,7 @@ async function generateQwenImage(
+       payload = JSON.parse(responseText)
+     } catch (error) {
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : options.signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
+@@ -1255,7 +1259,7 @@ async function generateMiniMaxImage(
+     } catch (error) {
+       const network = networkErrorFields(error)
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : options.signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(
+@@ -1273,7 +1277,7 @@ async function generateMiniMaxImage(
+       payload = JSON.parse(responseText)
+     } catch (error) {
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : options.signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
+@@ -1373,7 +1377,7 @@ async function requestOneChatImage(
+     } catch (error) {
+       const network = networkErrorFields(error)
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(
+@@ -1392,7 +1396,7 @@ async function requestOneChatImage(
+       payload = JSON.parse(responseText)
+     } catch (error) {
+       const failure = isBudgetTimeout(error)
+-        ? new ImageGenError('上游接口响应超时（240 秒）', 'upstream-timeout')
++        ? new ImageGenError('上游接口响应超时（300 秒）', 'upstream-timeout')
+         : signal?.aborted === true
+           ? new ImageGenError('任务已取消', 'cancelled')
+           : new ImageGenError(`上游接口返回了非 JSON 响应（HTTP ${response.status}）`, 'upstream-invalid')
+diff --git a/src/image-options.ts b/src/image-options.ts
+index e2e24a0..29dfdb6 100644
+--- a/src/image-options.ts
++++ b/src/image-options.ts
+@@ -1,9 +1,30 @@
+ /** Shared image controls and bounded single-image batches. */
+ export const IMAGE_RATIOS = ['auto', '1:1', '3:4', '4:3', '9:16', '2:3', '3:2', '16:9', '21:9', '4:5', '5:4', '5:7', '7:5', '9:21', '1:2', '2:1', '1:3', '3:1'] as const
+-export const IMAGE_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x1536', '1536x2048', '2048x2048', '3072x2048', '2048x3072', '4096x1755', '4096x2304', '2304x4096', '4096x3072', '3072x4096', '4096x4096'] as const
++/** Yeahzi-compatible pixel presets. Every dimension is divisible by 16. */
++export const IMAGE_SIZES = [
++  'auto',
++  '1024x1024', '1280x960', '1536x864', '960x1280', '864x1536',
++  '2048x2048', '2048x1536', '2048x1152', '1536x2048', '1152x2048',
++  '2560x1440', '1440x2560',
++  '4096x4096', '4096x3072', '3840x2160', '3072x4096', '2160x3840',
++] as const
+ export const IMAGE_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+ export const IMAGE_COUNTS = [1, 2, 5, 10, 50, 100] as const
+ 
++export type ImageSize = typeof IMAGE_SIZES[number]
++
++export function imageSizeTier(size: string): 'auto' | '1K' | '2K' | '4K' {
++  if (size === 'auto') return 'auto'
++  const match = /^(\d+)x(\d+)$/.exec(size)
++  if (match === null) return 'auto'
++  const longEdge = Math.max(Number(match[1]), Number(match[2]))
++  return longEdge >= 3840 ? '4K' : longEdge >= 2048 ? '2K' : '1K'
++}
++
++export function imageSizeNeedsUpscale(size: string): boolean {
++  return imageSizeTier(size) === '4K'
++}
++
+ export function normalizeImageCount(value: number): number {
+   return Number.isFinite(value) ? Math.min(100, Math.max(1, Math.round(value))) : 1
+ }
+diff --git a/src/templates-store.ts b/src/templates-store.ts
+index d0c14bd..b3b8e55 100644
+--- a/src/templates-store.ts
++++ b/src/templates-store.ts
+@@ -147,6 +147,8 @@ const memos = new Map<string, TemplateListResult>()
+ 
+ /** Per-file in-flight downloads, so a gallery scroll never double-fetches. */
+ const inflightImages = new Map<string, Promise<{ data: Buffer; mime: string } | undefined>>()
++const failedImages = new Map<string, number>()
++const FAILED_IMAGE_TTL_MS = 60 * 60_000
+ 
+ /** Resolve a registered source id to its fetch definition. */
+ function sourceDefOf(sourceId: string): TemplateSourceDef | undefined {
+@@ -390,9 +392,26 @@ function githubImageUrls(ref: string): string[] {
+   return [ref]
+ }
+ 
++/** Decode GitHub's signed camo proxy path to its original URL when possible. */
++function camoUpstream(ref: string): string | undefined {
++  const match = /^https:\/\/camo\.githubusercontent\.com\/[0-9a-f]+\/([0-9a-f]+)\/?$/i.exec(ref)
++  if (match === null) return undefined
++  try {
++    const decoded = Buffer.from(match[1]!, 'hex').toString('utf8')
++    return /^https?:\/\//i.test(decoded) ? decoded : undefined
++  } catch {
++    return undefined
++  }
++}
++
+ /** All upstream URLs to try for one image reference. */
+ function imageUrlsOf(def: TemplateSourceDef, ref: string): string[] {
+-  if (/^https?:\/\//i.test(ref)) return (def.imageUrls ?? (value => [value]))(ref)
++  if (/^https?:\/\//i.test(ref)) {
++    const candidates = (def.imageUrls ?? (value => [value]))(ref)
++    const decoded = camoUpstream(ref)
++    if (decoded !== undefined) candidates.unshift(decoded)
++    return [...new Set(candidates)].filter(candidate => isAllowedImageRef(def, candidate))
++  }
+   if (def.imageBaseUrl === undefined) return []
+   return [`${def.imageBaseUrl}${encodeURIComponent(ref)}`]
+ }
+@@ -441,7 +460,13 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
+               await new Promise(resolve => setTimeout(resolve, Number.isFinite(delay) && delay > 0 ? Math.min(delay * 1000, 5000) : 250))
+               continue
+             }
+-            console.error('[imagegen] template image HTTP failure', response.status, new URL(url).hostname)
++            console.error('[imagegen] template image HTTP failure', {
++              ref,
++              url,
++              status: response.status,
++              contentType: response.headers.get('content-type') ?? '',
++              contentLength: response.headers.get('content-length') ?? '',
++            })
+             break
+           }
+           const data = await readLimitedBody(response, MAX_IMAGE_BYTES)
+@@ -450,10 +475,16 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
+           await atomicWrite(path.join(cacheDir, cacheFile), data)
+           return { data, mime }
+         } catch (error) {
+-          console.error('[imagegen] template image download/cache failed', error instanceof Error ? error.message : String(error))
++          console.error('[imagegen] template image download/cache failed', {
++            ref,
++            url,
++            attempt: attempt + 1,
++            error: error instanceof Error ? error.message : String(error),
++          })
+         }
+       }
+     }
++    console.error('[imagegen] template image download failed', { ref, cacheFile, reason: 'all-candidates-exhausted' })
+     return undefined
+   })
+ }
+@@ -473,18 +504,38 @@ export async function readTemplateImage(sourceId: string, file: string, scope: s
+   if (!list.cases.some(entry => entry.image === file)) return undefined
+   const cacheDir = path.join(templateImageCacheRoot(), scope, sourceId)
+   const cacheFile = cacheFileOf(file)
++  const cacheKey = `${cacheDir}/${file}`
++  const failedUntil = failedImages.get(cacheKey)
++  if (failedUntil !== undefined) {
++    if (failedUntil > Date.now()) {
++      console.warn('[imagegen] template image failure cache hit', { sourceId, scope, ref: file, until: new Date(failedUntil).toISOString() })
++      return undefined
++    }
++    failedImages.delete(cacheKey)
++  }
+   try {
+     const data = await fs.readFile(path.join(cacheDir, cacheFile))
+-    const mime = assertCompleteImage(data)
+-    if (mime !== undefined) return { data, mime }
+-  } catch { /* fall through to legacy cache / download */ }
+-  const cacheKey = `${cacheDir}/${file}`
++    try {
++      const mime = assertCompleteImage(data)
++      if (mime !== undefined) return { data, mime }
++      console.warn('[imagegen] template image cache invalid', { sourceId, scope, ref: file, cacheFile, reason: 'incomplete-or-unknown-format' })
++    } catch (error) {
++      console.warn('[imagegen] template image cache invalid', { sourceId, scope, ref: file, cacheFile, reason: error instanceof Error ? error.message : String(error) })
++    }
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
++      console.warn('[imagegen] template image cache read failed', { sourceId, scope, ref: file, cacheFile, error: error instanceof Error ? error.message : String(error) })
++    }
++  }
+   const inflight = inflightImages.get(cacheKey)
+   if (inflight !== undefined) return inflight
+   const pending = fetchTemplateImage(def, file, cacheFile, cacheDir)
+   inflightImages.set(cacheKey, pending)
+   try {
+-    return await pending
++    const result = await pending
++    if (result === undefined) failedImages.set(cacheKey, Date.now() + FAILED_IMAGE_TTL_MS)
++    else failedImages.delete(cacheKey)
++    return result
+   } finally {
+     inflightImages.delete(cacheKey)
+   }
+@@ -493,4 +544,5 @@ export async function readTemplateImage(sourceId: string, file: string, scope: s
+ /** Drop the in-memory list memos (tests). */
+ export function clearTemplateMemo(): void {
+   memos.clear()
++  failedImages.clear()
+ }

@@ -147,6 +147,8 @@ const memos = new Map<string, TemplateListResult>()
 
 /** Per-file in-flight downloads, so a gallery scroll never double-fetches. */
 const inflightImages = new Map<string, Promise<{ data: Buffer; mime: string } | undefined>>()
+const failedImages = new Map<string, number>()
+const FAILED_IMAGE_TTL_MS = 60 * 60_000
 
 /** Resolve a registered source id to its fetch definition. */
 function sourceDefOf(sourceId: string): TemplateSourceDef | undefined {
@@ -390,9 +392,26 @@ function githubImageUrls(ref: string): string[] {
   return [ref]
 }
 
+/** Decode GitHub's signed camo proxy path to its original URL when possible. */
+function camoUpstream(ref: string): string | undefined {
+  const match = /^https:\/\/camo\.githubusercontent\.com\/[0-9a-f]+\/([0-9a-f]+)\/?$/i.exec(ref)
+  if (match === null) return undefined
+  try {
+    const decoded = Buffer.from(match[1]!, 'hex').toString('utf8')
+    return /^https?:\/\//i.test(decoded) ? decoded : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** All upstream URLs to try for one image reference. */
 function imageUrlsOf(def: TemplateSourceDef, ref: string): string[] {
-  if (/^https?:\/\//i.test(ref)) return (def.imageUrls ?? (value => [value]))(ref)
+  if (/^https?:\/\//i.test(ref)) {
+    const candidates = (def.imageUrls ?? (value => [value]))(ref)
+    const decoded = camoUpstream(ref)
+    if (decoded !== undefined) candidates.unshift(decoded)
+    return [...new Set(candidates)].filter(candidate => isAllowedImageRef(def, candidate))
+  }
   if (def.imageBaseUrl === undefined) return []
   return [`${def.imageBaseUrl}${encodeURIComponent(ref)}`]
 }
@@ -441,7 +460,13 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
               await new Promise(resolve => setTimeout(resolve, Number.isFinite(delay) && delay > 0 ? Math.min(delay * 1000, 5000) : 250))
               continue
             }
-            console.error('[imagegen] template image HTTP failure', response.status, new URL(url).hostname)
+            console.error('[imagegen] template image HTTP failure', {
+              ref,
+              url,
+              status: response.status,
+              contentType: response.headers.get('content-type') ?? '',
+              contentLength: response.headers.get('content-length') ?? '',
+            })
             break
           }
           const data = await readLimitedBody(response, MAX_IMAGE_BYTES)
@@ -450,10 +475,16 @@ async function fetchTemplateImage(def: TemplateSourceDef, ref: string, cacheFile
           await atomicWrite(path.join(cacheDir, cacheFile), data)
           return { data, mime }
         } catch (error) {
-          console.error('[imagegen] template image download/cache failed', error instanceof Error ? error.message : String(error))
+          console.error('[imagegen] template image download/cache failed', {
+            ref,
+            url,
+            attempt: attempt + 1,
+            error: error instanceof Error ? error.message : String(error),
+          })
         }
       }
     }
+    console.error('[imagegen] template image download failed', { ref, cacheFile, reason: 'all-candidates-exhausted' })
     return undefined
   })
 }
@@ -473,18 +504,38 @@ export async function readTemplateImage(sourceId: string, file: string, scope: s
   if (!list.cases.some(entry => entry.image === file)) return undefined
   const cacheDir = path.join(templateImageCacheRoot(), scope, sourceId)
   const cacheFile = cacheFileOf(file)
+  const cacheKey = `${cacheDir}/${file}`
+  const failedUntil = failedImages.get(cacheKey)
+  if (failedUntil !== undefined) {
+    if (failedUntil > Date.now()) {
+      console.warn('[imagegen] template image failure cache hit', { sourceId, scope, ref: file, until: new Date(failedUntil).toISOString() })
+      return undefined
+    }
+    failedImages.delete(cacheKey)
+  }
   try {
     const data = await fs.readFile(path.join(cacheDir, cacheFile))
-    const mime = assertCompleteImage(data)
-    if (mime !== undefined) return { data, mime }
-  } catch { /* fall through to legacy cache / download */ }
-  const cacheKey = `${cacheDir}/${file}`
+    try {
+      const mime = assertCompleteImage(data)
+      if (mime !== undefined) return { data, mime }
+      console.warn('[imagegen] template image cache invalid', { sourceId, scope, ref: file, cacheFile, reason: 'incomplete-or-unknown-format' })
+    } catch (error) {
+      console.warn('[imagegen] template image cache invalid', { sourceId, scope, ref: file, cacheFile, reason: error instanceof Error ? error.message : String(error) })
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[imagegen] template image cache read failed', { sourceId, scope, ref: file, cacheFile, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
   const inflight = inflightImages.get(cacheKey)
   if (inflight !== undefined) return inflight
   const pending = fetchTemplateImage(def, file, cacheFile, cacheDir)
   inflightImages.set(cacheKey, pending)
   try {
-    return await pending
+    const result = await pending
+    if (result === undefined) failedImages.set(cacheKey, Date.now() + FAILED_IMAGE_TTL_MS)
+    else failedImages.delete(cacheKey)
+    return result
   } finally {
     inflightImages.delete(cacheKey)
   }
@@ -493,4 +544,5 @@ export async function readTemplateImage(sourceId: string, file: string, scope: s
 /** Drop the in-memory list memos (tests). */
 export function clearTemplateMemo(): void {
   memos.clear()
+  failedImages.clear()
 }
