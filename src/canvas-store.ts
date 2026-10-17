@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { CanvasAssetRef, CanvasDocument, CanvasFileKind, CanvasNode, CanvasSummary } from './protocol.ts'
+import { isPosterDocument } from './poster.ts'
 import { imageDataRoot } from './image-storage-path.ts'
 
 /** Cap on one canvas file asset (arbitrary types travel as raw bytes). */
@@ -313,6 +314,7 @@ function isNode(value: unknown): value is CanvasNode {
   if (metadata !== undefined && (metadata === null || typeof metadata !== 'object')) return false
   const state = (metadata ?? {}) as Record<string, unknown>
   if (node.type === 'image') {
+    if (state.poster !== undefined && !isPosterDocument(state.poster)) return false
     if (state.asset !== undefined && !isAssetRef(state.asset)) return false
     return state.status === undefined || state.status === 'idle' || state.status === 'generating' || state.status === 'success' || state.status === 'error'
   }

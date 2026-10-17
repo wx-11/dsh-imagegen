@@ -21,3 +21,5 @@ Thumbs.db
 
 # Local verification artifacts
 artifacts/
+# Local poster browser fixture output
+.poster-preview/

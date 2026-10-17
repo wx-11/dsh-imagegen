@@ -17,6 +17,7 @@ import type { CanvasAnnotation, CanvasAssetRef, CanvasConnection, CanvasDocument
 import type { ImageGenApi } from './api.ts'
 import { errorMessage, tt } from './helpers.ts'
 import { autoRemoveBackground, canvasToDataUrl, compositeAnnotatedResult, containRect, cropRaster, drawAnnotation, loadRaster, rectBetween, transparencyRatio } from './image-ops.ts'
+import { PosterEditor } from './PosterEditor.tsx'
 import { TemplateLibrary } from './TemplateLibrary.tsx'
 import { ModelPicker, resolveModelChoice, type ModelPickerValue } from './ModelPicker.tsx'
 import type { ImageModelGroup } from './settings-scope.ts'
@@ -1163,6 +1164,9 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
   const [nodeAddMenu, setNodeAddMenu] = useState<{ nodeId: string; nodeType: CanvasNode['type']; screen: Point } | null>(null)
   const [minimapOpen, setMinimapOpen] = useState(true)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [posterTarget, setPosterTarget] = useState<{ canvasId: string; nodeId: string } | null>(null)
+  const posterOpenRef = useRef(false)
+  posterOpenRef.current = posterTarget !== null
   const [backgroundMenu, setBackgroundMenu] = useState<Point | null>(null)
   const [imageMenu, setImageMenu] = useState<Point | null>(null)
   const menuCloseTimer = useRef<number | null>(null)
@@ -2926,8 +2930,15 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
         }
       }
       void saveWithRetry().then(next => {
+        // A save may finish while a local operation (such as poster editing)
+        // added nodes. Keep those edits and carry forward only the server revision.
+        // Also ignore responses from a canvas the user has already left.
+        if (documentRef.current?.id !== next.id) return
         syncedRef.current = JSON.stringify(next)
-        setDocument(next)
+        setDocument(current => {
+          if (current === null || current.id !== next.id) return current
+          return JSON.stringify(current) === key ? next : { ...current, revision: next.revision }
+        })
         setProjects(previous => {
           const favorite = previous.find(item => item.id === next.id)?.favorite === true
           return [summaryOf(next, favorite), ...previous.filter(item => item.id !== next.id)]
@@ -3021,6 +3032,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
     const isEditingTarget = (target: EventTarget | null): boolean => matchesSelector(target, 'input, textarea, select, [data-dsh-select], [data-dsh-select-menu], [contenteditable="true"]')
 
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (posterOpenRef.current) return
       if (event.key === 'Control') setCtrlPressed(true)
       if (event.code === 'Space' && !isEditingTarget(event.target)) {
         event.preventDefault()
@@ -3078,6 +3090,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
     }
     const onBlur = (): void => { setSpacePressed(false); setCtrlPressed(false) }
     const onPaste = (event: ClipboardEvent): void => {
+      if (posterOpenRef.current) return
       if (isEditingTarget(event.target)) return
       const files = [...(event.clipboardData?.files ?? [])].filter(file => file.type.startsWith('image/'))
       if (files.length > 0) {
@@ -3763,6 +3776,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
           <IconButton name="edit" label={tt('canvas.editImage')} disabled={busyLabel !== undefined} onClick={() => setEditImageNodeId(node.id)} />
           <IconButton name="annotate" label={tt('canvas.annotate')} active={annotating} onClick={() => toggleAnnotate(node)} />
           <IconButton name="removeBg" label={tt('canvas.removeBackground')} disabled={busyLabel !== undefined} onClick={() => { void removeNodeBackground(node) }} />
+          <IconButton name="text" label={tt('poster.title')} disabled={busyLabel !== undefined} onClick={() => { if (document !== null) setPosterTarget({ canvasId: document.id, nodeId: node.id }) }} />
           <IconButton name="layers" label={tt('canvas.splitLayers')} disabled={busyLabel !== undefined} onClick={() => { void splitLayers(node) }} />
           <span className={css.toolbarDivider} aria-hidden="true" />
           <ModelPicker
@@ -4051,6 +4065,7 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
         const node = nodeById.get(contextMenu.nodeId)
         if (node !== undefined && node.type === 'image' && (assetOf(node)?.url.length ?? 0) > 0) {
           items.push({ label: tt('canvas.preview.expand'), icon: 'expand', action: () => openImageNode(node) })
+          items.push({ label: tt('poster.title'), icon: 'text', action: () => { if (document !== null) setPosterTarget({ canvasId: document.id, nodeId: node.id }) } })
           items.push({ label: tt('canvas.download'), icon: 'download', action: () => downloadNode(node) })
         }
         if (node !== undefined && node.type === 'file' && (assetOf(node)?.url.length ?? 0) > 0) {
@@ -4486,6 +4501,34 @@ export function CanvasWorkspace(props: CanvasWorkspaceProps): React.JSX.Element 
       <button type="button" aria-label={tt('canvas.dismiss')} onClick={() => { setError(null); setErrorAction(null) }}><ToolbarIcon name="close" /></button>
     </div> : null}
     {notice !== null ? <div className={css.errorToast} data-variant="notice" role="status" data-canvas-no-zoom=""><span>{notice}</span><button type="button" aria-label={tt('canvas.dismiss')} onClick={() => setNotice(null)}><ToolbarIcon name="close" /></button></div> : null}
+
+    {posterTarget !== null && document?.id === posterTarget.canvasId ? (() => {
+      const source = document.nodes.find(node => node.id === posterTarget.nodeId)
+      const asset = source === undefined ? undefined : usableAsset(source)
+      if (source === undefined || asset === undefined) return null
+      return <PosterEditor
+        api={api}
+        asset={asset}
+        recipe={nodeMetadata(source).poster}
+        onClose={() => setPosterTarget(null)}
+        onSave={async (poster, dataUrl) => {
+          const canvasId = posterTarget.canvasId
+          const uploaded = await api.canvasUpload(dataUrl, poster.width, poster.height, { origin: 'upload', originId: `poster-${source.id}` })
+          if (documentRef.current?.id !== canvasId || !documentRef.current.nodes.some(node => node.id === source.id)) throw new Error(tt('poster.sourceChanged'))
+          const resultId = newId('node')
+          const dimensions = sizeForAsset(uploaded)
+          const result: CanvasNode = {
+            id: resultId, type: 'image', title: tt('poster.resultTitle'),
+            x: source.x + source.width + NODE_GAP, y: source.y,
+            ...dimensions,
+            metadata: { asset: uploaded, status: 'success', sourceNodeId: source.id, poster },
+          }
+          mutate(previous => ({ ...previous, nodes: [...previous.nodes, result], connections: [...previous.connections, { id: newId('edge'), fromNodeId: source.id, toNodeId: resultId }] }))
+          setSelectedIds(new Set([resultId]))
+          setNotice(tt('poster.saved'))
+        }}
+      />
+    })() : null}
 
     {pickerOpen ? <ImagePicker
       api={api}

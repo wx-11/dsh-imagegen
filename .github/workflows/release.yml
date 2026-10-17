@@ -1,0 +1,58 @@
+name: Validate, package and release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.25.0
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type check
+        run: pnpm run typecheck
+      - name: Build distributable
+        run: pnpm run build
+      - name: Regression checks
+        run: node scripts/smoke.mjs
+      - name: Package and verify
+        run: |
+          mkdir -p dist
+          pnpm pack --pack-destination dist
+          node scripts/verify-package.mjs dist/*.tgz
+          cd dist
+          sha256sum *.tgz > SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving it unchanged."
+            exit 0
+          fi
+          test -f "docs/releases/${tag}.md"
+          gh release create "$tag" dist/*.tgz dist/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "$tag" \
+            --notes-file "docs/releases/${tag}.md"

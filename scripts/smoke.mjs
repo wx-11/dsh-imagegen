@@ -3748,6 +3748,31 @@ await check('D3 sidebar entry mounts inside desktop and unknown sidebar shells, 
   jsdomWindow.setTimeout = realSetTimeout
 })
 
+await check('C14 editable poster recipes survive host saves without changing legacy nodes', async () => {
+  const document = await host.canvasStore.create('poster persistence')
+  const asset = await host.canvasStore.putImage({ data: Buffer.from('poster fixture'), mime: 'image/png', width: 1000, height: 700, origin: 'upload' })
+  const poster = { version: 1, width: 1000, height: 700, background: asset, layers: [
+    { id: 'headline', type: 'text', x: 20, y: 30, width: 600, text: '价格 ¥169\n新品上市', fontSize: 48, fontFamily: 'sans-serif', color: '#ffffff', bold: true, align: 'center' },
+    { id: 'logo', type: 'image', x: 700, y: 50, width: 100, height: 70, asset },
+  ] }
+  const original = { id: 'original', type: 'image', title: 'original', x: 0, y: 0, width: 240, height: 240, metadata: { asset, status: 'success' } }
+  const result = { ...original, id: 'poster', metadata: { asset, status: 'success', poster } }
+  const saved = await host.canvasStore.save({ ...document, nodes: [original, result] }, document.revision)
+  const reopened = await host.canvasStore.read(saved.id)
+  assert.deepEqual(reopened.nodes[0], original, 'legacy image node is unchanged')
+  assert.deepEqual(reopened.nodes[1].metadata.poster, poster, 'all text, image assets, and layer order survive disk persistence')
+  for (const bad of [
+    { ...poster, width: 0 }, { ...poster, height: 999999 },
+    { ...poster, layers: [{ ...poster.layers[0], fontSize: null }] },
+    { ...poster, layers: [{ ...poster.layers[0], text: 'x'.repeat(4001) }] },
+    { ...poster, layers: [{ ...poster.layers[1], asset: { ...asset, url: 'https://example.test/logo.png' } }] },
+    { ...poster, layers: Array.from({ length: 41 }, (_, i) => ({ ...poster.layers[0], id: `text-${i}` })) },
+  ]) {
+    await assert.rejects(() => host.canvasStore.save({ ...saved, nodes: [{ ...result, metadata: { asset, poster: bad } }] }, saved.revision), /malformed/)
+  }
+  assert.deepEqual((await host.canvasStore.read(saved.id)).nodes[1].metadata.poster, poster, 'invalid saves do not corrupt the existing document')
+})
+
 // --------------- E. full client apply in jsdom (mounts the sidebar entry)
 await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async () => {
   const { JSDOM } = await import('jsdom')
@@ -3872,7 +3897,7 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
       drawImage,
       fillRect,
       save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {},
-      strokeRect() {}, clearRect() {}, fillText() {}, scale() {},
+      strokeRect() {}, clearRect() {}, fillText() {}, scale() {}, rect() {}, clip() {},
       measureText: () => ({ width: 8 }),
       strokeStyle: '', lineWidth: 1, font: '', textBaseline: '', textAlign: '', lineCap: '', lineJoin: '',
       get fillStyle() { return canvas.__fillStyle ?? '#000000' },
@@ -4952,6 +4977,55 @@ await check('E1 client apply mounts the sidebar entry and studio (jsdom)', async
       while (!predicate() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
       return predicate()
     }
+
+    // Editable poster end-to-end: the source stays untouched, local overlays
+    // survive the real save payload, and reopening edits the original recipe.
+    const clickText = (root, text) => {
+      const button = [...root.querySelectorAll('button')].find(button => button.textContent === text)
+      assert.ok(button, `button exists: ${text}`)
+      button.click()
+    }
+    view.querySelector('[data-node-id="node-image"] [title="海报编辑：文字 / Logo"]').click()
+    await waitForSelector(jsdomDocument, '[data-poster-editor]')
+    let posterDialog = jsdomDocument.querySelector('[data-poster-editor]')
+    clickText(posterDialog, '添加文字')
+    await waitForSelector(posterDialog, 'textarea')
+    assert.equal(posterDialog.querySelector('textarea').value, '在这里输入标题')
+    const beforePosterNodes = view.querySelectorAll('[data-node-id]').length
+    posterDialog.querySelector('[role="dialog"]').dispatchEvent(new jsdomWindow.KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(view.querySelectorAll('[data-node-id]').length, beforePosterNodes, 'poster keyboard input cannot delete canvas nodes')
+    assert.ok(await waitUntil(() => ![...posterDialog.querySelectorAll('button')].find(button => button.textContent === '保存到画布').disabled))
+    clickText(posterDialog, '保存到画布')
+    assert.ok(await waitUntil(() => (canvasSaves.at(-1)?.nodes ?? []).some(node => node.metadata?.poster !== undefined)), 'poster is persisted through the canvas save route')
+    const savedPoster = canvasSaves.at(-1).nodes.find(node => node.metadata?.poster !== undefined)
+    assert.equal(savedPoster.metadata.poster.layers.length, 1)
+    assert.equal(savedPoster.metadata.poster.background.assetId, canvasImageAsset.assetId)
+    assert.deepEqual(canvasSaves.at(-1).nodes.find(node => node.id === 'node-image').metadata, { asset: canvasImageAsset, status: 'success' }, 'poster does not modify the source')
+    view.querySelector(`[data-node-id="${savedPoster.id}"] [title="海报编辑：文字 / Logo"]`).click()
+    await waitForSelector(jsdomDocument, '[data-poster-editor]')
+    posterDialog = jsdomDocument.querySelector('[data-poster-editor]')
+    clickText(posterDialog, '在这里输入标题')
+    await waitForSelector(posterDialog, 'textarea')
+    assert.equal(posterDialog.querySelector('textarea').value, '在这里输入标题', 'reopen restores editable text instead of flattening it twice')
+    clickText(posterDialog, '添加文字')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    clickText(posterDialog, '撤销')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(posterDialog.querySelectorAll('[class*="layerHandle"]').length, 1, 'poster undo removes the added overlay')
+    clickText(posterDialog, '重做')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(posterDialog.querySelectorAll('[class*="layerHandle"]').length, 2, 'poster redo restores the overlay')
+    posterDialog.querySelector('[aria-label="关闭"]').click()
+    await new Promise(resolve => setTimeout(resolve, 25))
+    assert.ok(jsdomDocument.querySelector('[data-poster-editor]'), 'dirty close requires explicit discard')
+    clickText(posterDialog, '放弃修改')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(jsdomDocument.querySelector('[data-poster-editor]'), null)
+    assert.equal(canvasSaves.at(-1).nodes.find(node => node.id === savedPoster.id).metadata.poster.layers.length, 1, 'discard leaves the saved recipe intact')
+    view.querySelector(`[data-node-id="${savedPoster.id}"] [title="删除"]`).click()
+    assert.ok(await waitUntil(() => !(canvasSaves.at(-1)?.nodes ?? []).some(node => node.id === savedPoster.id)), 'poster fixture is removed before the original canvas regressions')
+
 
     // Regression for the runaway Dock magnification (#27): a browser can give
     // requestAnimationFrame a timestamp older than performance.now(), which

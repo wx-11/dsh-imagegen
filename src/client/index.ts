@@ -54,6 +54,8 @@ export const inject = ['slots', 'locale', 'connection', 'sessions', 'conversatio
 // the only place these are reachable from Node); not part of the contract.
 export { autoRemoveBackground, compositeAnnotatedResult, containRect, cropRaster, drawAnnotation, rectBetween, rectToPixels, removeBackground, transparencyRatio } from './image-ops.ts'
 export { addConversationAttachments, conversationInput, createConversationDrafts, releaseConversationDrafts, removeConversationAttachment } from './conversation-sync.ts'
+export { isPosterDocument, wrapPosterText } from '../poster.ts'
+export { paintPoster } from './poster-render.ts'
 export { sidebarEntryTestHooks } from './sidebar-entry.ts'
 
 /**

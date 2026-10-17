@@ -8,7 +8,7 @@
 export const IMAGEGEN_SETTINGS_NAMESPACE = 'dsh-imagegen'
 
 /** Published package version shared by the host updater and the client UI. */
-export const PLUGIN_VERSION = '1.7.10'
+export const PLUGIN_VERSION = '1.7.11'
 
 /** Same-origin route family (loopback-only, mirroring the dsh-ssh fence). */
 export const SETTINGS_API = {
@@ -816,8 +816,12 @@ export interface CanvasViewport {
   k: number
 }
 
+export type { PosterDocument, PosterLayer, PosterTextLayer, PosterImageLayer } from './poster.ts'
+
 /** Free-form per-node state, mirroring the node-graph canvas model. */
 export interface CanvasNodeMetadata {
+  /** Editable overlay recipe; asset remains the flattened, compatible image. */
+  poster?: import('./poster.ts').PosterDocument
   /** Image nodes: the rendered asset. */
   asset?: CanvasAssetRef
   status?: 'idle' | 'generating' | 'success' | 'error'
